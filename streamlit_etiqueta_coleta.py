@@ -11,6 +11,9 @@ try:
 
     REPORTLAB_AVAILABLE = True
 except Exception:
+    code128 = None
+    A4 = None
+    canvas = None
     REPORTLAB_AVAILABLE = False
 
 
@@ -126,7 +129,7 @@ def _montar_dados(entradas: dict) -> dict:
 
 
 def _desenhar_etiqueta_pdf(
-    c: canvas.Canvas,
+    c,
     x: float,
     y: float,
     largura_pt: float,

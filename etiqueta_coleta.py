@@ -12,6 +12,9 @@ try:
 
     REPORTLAB_AVAILABLE = True
 except Exception:
+    code128 = None
+    A4 = None
+    canvas = None
     REPORTLAB_AVAILABLE = False
 
 try:
@@ -435,7 +438,7 @@ class EtiquetaColetaApp:
 
     def _desenhar_etiqueta_pdf(
         self,
-        c: canvas.Canvas,
+        c,
         x: float,
         y: float,
         largura_pt: float,
@@ -707,4 +710,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
