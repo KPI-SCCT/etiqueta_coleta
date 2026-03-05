@@ -16,12 +16,21 @@ except Exception:
 
 APP_NAME = "COLETA"
 DESTINOS = ["CTDI DO BR - SP", "FLEXTRONIC", "FEDEX CAJAMAR - SP"]
-PROJETOS = ["CIELO - POS", "CIELO - TEF", "FISERV - POS", "FISERV - TEF"]
+PROJETOS = ["CIELO - POS", "CIELO - TEF", "CIELO - TRANSF", "FISERV", "MOOZ", "STONE", "PICPAY", "PAGBANK", "CTRENDS", "C6BANK", "ADYEN", "CLOUDWALK"]
 PREFIXOS_ROMANEIO = {
     "CIELO - POS": "1.2/",
     "CIELO - TEF": "2.2/",
-    "FISERV - POS": "34.1/",
-    "FISERV - TEF": "34.2/",
+    "CIELO - TRANSF": "1.3/",
+    "FISERV": "34.3/",
+    "MOOZ": "42.3/",
+    "STONE": "41.3/",
+    "PICPAY": "49.3/",
+    "PAGBANK": "53.3/",
+    "CTRENDS": "39.3/",
+    "C6BANK": "43.3/",
+    "ADYEN": "45.3/",
+    "CLOUDWALK": "40.3/",
+    
 }
 MM_TO_POINTS = 72 / 25.4
 
@@ -54,17 +63,20 @@ def _validar_entradas(entradas: dict) -> list[str]:
         ("Romaneio", "romaneio_sufixo"),
         ("NR NF", "nr_nf"),
         ("ID FEDEX", "id_fedex"),
-        ("Volume Atual", "volume_atual"),
-        ("Volume Total", "volume_total"),
+        ("Volume", "volume_total"),
     ]:
         erro = _campo_obrigatorio_numerico(nome, entradas[chave])
         if erro:
             erros.append(erro)
 
-    if entradas["volume_atual"] and len(entradas["volume_atual"]) > 3:
-        erros.append("O campo 'Volume Atual' permite no maximo 3 digitos.")
     if entradas["volume_total"] and len(entradas["volume_total"]) > 3:
-        erros.append("O campo 'Volume Total' permite no maximo 3 digitos.")
+        erros.append("O campo 'Volume' permite no maximo 3 digitos.")
+    if (
+        entradas["volume_total"]
+        and entradas["volume_total"].isdigit()
+        and int(entradas["volume_total"]) <= 0
+    ):
+        erros.append("O campo 'Volume' deve ser maior que zero.")
 
     if entradas["largura_mm"] <= 0 or entradas["altura_mm"] <= 0:
         erros.append("Largura e altura da etiqueta devem ser maiores que zero.")
@@ -79,10 +91,27 @@ def _validar_entradas(entradas: dict) -> list[str]:
 def _montar_dados(entradas: dict) -> dict:
     prefixo = PREFIXOS_ROMANEIO[entradas["projeto"]]
     romaneio = f"{prefixo}{entradas['romaneio_sufixo']}"
-    vol_atual = entradas["volume_atual"].zfill(3)
-    vol_total = entradas["volume_total"].zfill(3)
-    codigo_barras = _apenas_numeros(romaneio) + vol_atual + vol_total
+    total_volumes = int(entradas["volume_total"])
+    vol_total_fmt = str(total_volumes).zfill(3)
+    base_codigo = _apenas_numeros(romaneio)
     data_emissao = datetime.now().strftime("%d/%m/%Y")
+    id_fedex_data = f"{entradas['id_fedex']} - {data_emissao}"
+
+    etiquetas = []
+    for indice in range(1, total_volumes + 1):
+        vol_atual_fmt = str(indice).zfill(3)
+        volume_fmt = f"{vol_atual_fmt}/{vol_total_fmt}"
+        etiquetas.append(
+            {
+                "destino": entradas["destino"],
+                "projeto": entradas["projeto"],
+                "romaneio": romaneio,
+                "nr_nf": entradas["nr_nf"],
+                "id_fedex_data": id_fedex_data,
+                "volume": volume_fmt,
+                "codigo_barras": f"{base_codigo}{vol_atual_fmt}{vol_total_fmt}",
+            }
+        )
 
     return {
         "destino": entradas["destino"],
@@ -90,36 +119,22 @@ def _montar_dados(entradas: dict) -> dict:
         "romaneio": romaneio,
         "nr_nf": entradas["nr_nf"],
         "id_fedex": entradas["id_fedex"],
-        "id_fedex_data": f"{entradas['id_fedex']} - {data_emissao}",
-        "volume": f"{vol_atual}/{vol_total}",
-        "codigo_barras": codigo_barras,
+        "id_fedex_data": id_fedex_data,
+        "volume_total": total_volumes,
+        "etiquetas": etiquetas,
     }
 
 
-def _gerar_pdf_bytes(
+def _desenhar_etiqueta_pdf(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    largura_pt: float,
+    altura_pt: float,
     dados: dict,
-    largura_mm: float,
-    altura_mm: float,
     espacamento_extra: float,
     escala_fonte_usuario: float,
-) -> bytes:
-    if not REPORTLAB_AVAILABLE:
-        raise RuntimeError("Biblioteca reportlab nao encontrada.")
-
-    largura_pt = largura_mm * MM_TO_POINTS
-    altura_pt = altura_mm * MM_TO_POINTS
-
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    c.setTitle(APP_NAME)
-
-    _, page_h = A4
-    margem = 12 * MM_TO_POINTS
-    x = margem
-    y = page_h - margem - altura_pt
-    if y < margem:
-        y = margem
-
+) -> None:
     referencia_largura = 105 * MM_TO_POINTS
     referencia_altura = 148.5 * MM_TO_POINTS
     escala_etiqueta = min(largura_pt / referencia_largura, altura_pt / referencia_altura)
@@ -230,7 +245,44 @@ def _gerar_pdf_bytes(
     c.setFont("Helvetica", fonte_codigo)
     c.drawCentredString(area_x + (area_largura / 2), codigo_y, codigo)
 
-    c.showPage()
+
+def _gerar_pdf_bytes(
+    dados_lote: dict,
+    largura_mm: float,
+    altura_mm: float,
+    espacamento_extra: float,
+    escala_fonte_usuario: float,
+) -> bytes:
+    if not REPORTLAB_AVAILABLE:
+        raise RuntimeError("Biblioteca reportlab nao encontrada.")
+
+    largura_pt = largura_mm * MM_TO_POINTS
+    altura_pt = altura_mm * MM_TO_POINTS
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle(APP_NAME)
+
+    _, page_h = A4
+    margem = 12 * MM_TO_POINTS
+    x = margem
+    y = page_h - margem - altura_pt
+    if y < margem:
+        y = margem
+
+    for etiqueta in dados_lote["etiquetas"]:
+        _desenhar_etiqueta_pdf(
+            c,
+            x,
+            y,
+            largura_pt,
+            altura_pt,
+            etiqueta,
+            espacamento_extra,
+            escala_fonte_usuario,
+        )
+        c.showPage()
+
     c.save()
     return buffer.getvalue()
 
@@ -267,9 +319,9 @@ def main() -> None:
         nr_nf = coln1.text_input("NR NF *", max_chars=20).strip()
         id_fedex = coln2.text_input("ID FEDEX *", max_chars=20).strip()
 
-        colv1, colv2 = st.columns(2)
-        volume_atual = colv1.text_input("Volume Atual *", max_chars=3).strip()
-        volume_total = colv2.text_input("Volume Total *", max_chars=3).strip()
+        volume_total = st.text_input(
+            "Volume (qtd total de etiquetas) *", max_chars=3
+        ).strip()
 
         st.markdown("**Configuracao da Etiqueta**")
         colc1, colc2, colc3, colc4 = st.columns(4)
@@ -289,7 +341,6 @@ def main() -> None:
             "romaneio_sufixo": romaneio_sufixo,
             "nr_nf": nr_nf,
             "id_fedex": id_fedex,
-            "volume_atual": volume_atual,
             "volume_total": volume_total,
             "largura_mm": largura_mm,
             "altura_mm": altura_mm,
@@ -322,7 +373,18 @@ def main() -> None:
     resultado = st.session_state.get("resultado")
     if resultado:
         dados = resultado["dados"]
-        st.success("Etiqueta validada e pronta para PDF.")
+        etiquetas = dados["etiquetas"]
+        st.success(f"Etiquetas validadas e prontas para PDF. Quantidade: {len(etiquetas)}.")
+
+        limite_preview = 120
+        linhas_preview = [
+            f"{item['volume']} -> {item['codigo_barras']}"
+            for item in etiquetas[:limite_preview]
+        ]
+        if len(etiquetas) > limite_preview:
+            linhas_preview.append(
+                f"... (mostrando {limite_preview} de {len(etiquetas)} etiquetas)"
+            )
 
         st.markdown("**Preview dos dados**")
         st.code(
@@ -332,8 +394,9 @@ def main() -> None:
                 f"Romaneio: {dados['romaneio']}\n"
                 f"NR NF: {dados['nr_nf']}\n"
                 f"ID FEDEX: {dados['id_fedex_data']}\n"
-                f"Volume: {dados['volume']}\n"
-                f"Codigo de barras: {dados['codigo_barras']}"
+                f"Quantidade de etiquetas: {len(etiquetas)}\n\n"
+                "Volumes / Codigos de barras:\n"
+                + "\n".join(linhas_preview)
             ),
             language="text",
         )

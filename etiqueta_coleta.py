@@ -1,4 +1,4 @@
-﻿import re
+import re
 import tempfile
 import tkinter as tk
 from datetime import datetime
@@ -25,12 +25,20 @@ except Exception:
 
 APP_NAME = "COLETA"
 DESTINOS = ["CTDI DO BR - SP", "FLEXTRONIC", "FEDEX CAJAMAR - SP"]
-PROJETOS = ["CIELO - POS", "CIELO - TEF", "FISERV - POS", "FISERV - TEF"]
+PROJETOS = ["CIELO - POS", "CIELO - TEF", "CIELO - TRANSF", "FISERV", "MOOZ", "STONE", "PICPAY", "PAGBANK", "CTRENDS", "C6BANK", "ADYEN", "CLOUDWALK"]
 PREFIXOS_ROMANEIO = {
     "CIELO - POS": "1.2/",
     "CIELO - TEF": "2.2/",
-    "FISERV - POS": "34.1/",
-    "FISERV - TEF": "34.2/",
+    "CIELO - TRANSF": "1.3/",
+    "FISERV": "34.3/",
+    "MOOZ": "42.3/",
+    "STONE": "41.3/",
+    "PICPAY": "49.3/",
+    "PAGBANK": "53.3/",
+    "CTRENDS": "39.3/",
+    "C6BANK": "43.3/",
+    "ADYEN": "45.3/",
+    "CLOUDWALK": "40.3/",
 }
 PRINTER_DEFAULT_LABEL = "Padrao do sistema"
 MM_TO_POINTS = 72 / 25.4
@@ -278,16 +286,31 @@ class EtiquetaColetaApp:
         if not sufixo_romaneio:
             messagebox.showerror("Campo obrigatorio", "Informe os numeros do Romaneio.")
             return None
+        if not sufixo_romaneio.isdigit():
+            messagebox.showerror("Campo invalido", "Romaneio aceita apenas numeros.")
+            return None
         if not nr_nf:
             messagebox.showerror("Campo obrigatorio", "Informe o campo NR NF.")
             return None
+        if not nr_nf.isdigit():
+            messagebox.showerror("Campo invalido", "NR NF aceita apenas numeros.")
+            return None
         if not id_fedex:
             messagebox.showerror("Campo obrigatorio", "Informe o campo ID FEDEX.")
+            return None
+        if not id_fedex.isdigit():
+            messagebox.showerror("Campo invalido", "ID FEDEX aceita apenas numeros.")
             return None
         if not volume_qtd:
             messagebox.showerror(
                 "Campo obrigatorio", "Informe o campo Volume (qtd total)."
             )
+            return None
+        if not volume_qtd.isdigit():
+            messagebox.showerror("Campo invalido", "Volume aceita apenas numeros.")
+            return None
+        if len(volume_qtd) > 3:
+            messagebox.showerror("Campo invalido", "Volume permite no maximo 3 digitos.")
             return None
 
         total_volumes = int(volume_qtd)
