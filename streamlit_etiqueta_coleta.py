@@ -1,0 +1,361 @@
+import re
+from datetime import datetime
+from io import BytesIO
+
+import streamlit as st
+
+try:
+    from reportlab.graphics.barcode import code128
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    REPORTLAB_AVAILABLE = False
+
+
+APP_NAME = "COLETA"
+DESTINOS = ["CTDI DO BR - SP", "FLEXTRONIC", "FEDEX CAJAMAR - SP"]
+PROJETOS = ["CIELO - POS", "CIELO - TEF", "FISERV - POS", "FISERV - TEF"]
+PREFIXOS_ROMANEIO = {
+    "CIELO - POS": "1.2/",
+    "CIELO - TEF": "2.2/",
+    "FISERV - POS": "34.1/",
+    "FISERV - TEF": "34.2/",
+}
+MM_TO_POINTS = 72 / 25.4
+
+
+def _clamp(valor: float, minimo: float, maximo: float) -> float:
+    return max(minimo, min(valor, maximo))
+
+
+def _apenas_numeros(valor: str) -> str:
+    return re.sub(r"\D", "", valor or "")
+
+
+def _campo_obrigatorio_numerico(nome: str, valor: str) -> str | None:
+    if not valor:
+        return f"O campo '{nome}' e obrigatorio."
+    if not valor.isdigit():
+        return f"O campo '{nome}' aceita apenas numeros."
+    return None
+
+
+def _validar_entradas(entradas: dict) -> list[str]:
+    erros: list[str] = []
+
+    if not entradas["destino"]:
+        erros.append("O campo 'Destino' e obrigatorio.")
+    if not entradas["projeto"]:
+        erros.append("O campo 'Projeto' e obrigatorio.")
+
+    for nome, chave in [
+        ("Romaneio", "romaneio_sufixo"),
+        ("NR NF", "nr_nf"),
+        ("ID FEDEX", "id_fedex"),
+        ("Volume Atual", "volume_atual"),
+        ("Volume Total", "volume_total"),
+    ]:
+        erro = _campo_obrigatorio_numerico(nome, entradas[chave])
+        if erro:
+            erros.append(erro)
+
+    if entradas["volume_atual"] and len(entradas["volume_atual"]) > 3:
+        erros.append("O campo 'Volume Atual' permite no maximo 3 digitos.")
+    if entradas["volume_total"] and len(entradas["volume_total"]) > 3:
+        erros.append("O campo 'Volume Total' permite no maximo 3 digitos.")
+
+    if entradas["largura_mm"] <= 0 or entradas["altura_mm"] <= 0:
+        erros.append("Largura e altura da etiqueta devem ser maiores que zero.")
+    if entradas["espacamento_linhas"] < 0:
+        erros.append("O espacamento de linhas deve ser maior ou igual a zero.")
+    if entradas["escala_fonte"] <= 0:
+        erros.append("A escala de fonte deve ser maior que zero.")
+
+    return erros
+
+
+def _montar_dados(entradas: dict) -> dict:
+    prefixo = PREFIXOS_ROMANEIO[entradas["projeto"]]
+    romaneio = f"{prefixo}{entradas['romaneio_sufixo']}"
+    vol_atual = entradas["volume_atual"].zfill(3)
+    vol_total = entradas["volume_total"].zfill(3)
+    codigo_barras = _apenas_numeros(romaneio) + vol_atual + vol_total
+    data_emissao = datetime.now().strftime("%d/%m/%Y")
+
+    return {
+        "destino": entradas["destino"],
+        "projeto": entradas["projeto"],
+        "romaneio": romaneio,
+        "nr_nf": entradas["nr_nf"],
+        "id_fedex": entradas["id_fedex"],
+        "id_fedex_data": f"{entradas['id_fedex']} - {data_emissao}",
+        "volume": f"{vol_atual}/{vol_total}",
+        "codigo_barras": codigo_barras,
+    }
+
+
+def _gerar_pdf_bytes(
+    dados: dict,
+    largura_mm: float,
+    altura_mm: float,
+    espacamento_extra: float,
+    escala_fonte_usuario: float,
+) -> bytes:
+    if not REPORTLAB_AVAILABLE:
+        raise RuntimeError("Biblioteca reportlab nao encontrada.")
+
+    largura_pt = largura_mm * MM_TO_POINTS
+    altura_pt = altura_mm * MM_TO_POINTS
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle(APP_NAME)
+
+    _, page_h = A4
+    margem = 12 * MM_TO_POINTS
+    x = margem
+    y = page_h - margem - altura_pt
+    if y < margem:
+        y = margem
+
+    referencia_largura = 105 * MM_TO_POINTS
+    referencia_altura = 148.5 * MM_TO_POINTS
+    escala_etiqueta = min(largura_pt / referencia_largura, altura_pt / referencia_altura)
+
+    borda = _clamp(0.85 * escala_etiqueta, 0.6, 1.4)
+    c.setLineWidth(borda)
+    c.rect(x, y, largura_pt, altura_pt)
+
+    pad = max(3.5 * MM_TO_POINTS, 6 * MM_TO_POINTS * escala_etiqueta)
+    area_x = x + pad
+    area_y = y + pad
+    area_largura = largura_pt - (2 * pad)
+    area_altura = altura_pt - (2 * pad)
+
+    linhas = [
+        ("DESTINO", dados["destino"]),
+        ("ROMANEIO", dados["romaneio"]),
+        ("PROJETO", dados["projeto"]),
+        ("NR NF", dados["nr_nf"]),
+        ("VOLUME", dados["volume"]),
+    ]
+
+    fonte_titulo = _clamp(12 * escala_etiqueta * escala_fonte_usuario, 8, 28)
+    fonte_label = _clamp(9.2 * escala_etiqueta * escala_fonte_usuario, 6, 20)
+    fonte_valor = _clamp(9.8 * escala_etiqueta * escala_fonte_usuario, 6, 20)
+    fonte_codigo = _clamp(8.2 * escala_etiqueta * escala_fonte_usuario, 6, 16)
+    fonte_identificador = _clamp(7.0 * escala_etiqueta * escala_fonte_usuario, 5.5, 12)
+    gap_linha = max(2.2, 1.8 * MM_TO_POINTS * escala_etiqueta) + espacamento_extra
+    gap_bloco = max(4.0, 3 * MM_TO_POINTS * escala_etiqueta)
+
+    altura_codigo = fonte_codigo * 1.45
+    altura_identificador = fonte_identificador * 1.45
+    altura_barcode = _clamp(area_altura * 0.2, 10 * MM_TO_POINTS, area_altura * 0.26)
+    gap_identificador_barra = max(2.2, 1.4 * MM_TO_POINTS * escala_etiqueta)
+    gap_barra_codigo = max(2.2, 1.3 * MM_TO_POINTS * escala_etiqueta)
+    bloco_barcode_altura = (
+        altura_codigo
+        + gap_barra_codigo
+        + altura_barcode
+        + gap_identificador_barra
+        + altura_identificador
+    )
+
+    y_topo = area_y + area_altura
+    y_titulo = y_topo - fonte_titulo
+    c.setFont("Helvetica-Bold", fonte_titulo)
+    c.drawCentredString(x + (largura_pt / 2), y_titulo, APP_NAME)
+
+    y_divisor = y_titulo - (gap_linha * 0.9)
+    c.setLineWidth(max(0.4, borda * 0.7))
+    c.line(area_x, y_divisor, area_x + area_largura, y_divisor)
+
+    y_detalhes_topo = y_divisor - gap_bloco
+    y_detalhes_base = area_y + bloco_barcode_altura + gap_bloco
+    altura_disponivel_detalhes = y_detalhes_topo - y_detalhes_base
+
+    passo_linha = max(fonte_label, fonte_valor) + gap_linha
+    altura_necessaria = (len(linhas) * max(fonte_label, fonte_valor)) + (
+        (len(linhas) - 1) * gap_linha
+    )
+    if altura_necessaria > altura_disponivel_detalhes and altura_disponivel_detalhes > 0:
+        fator = altura_disponivel_detalhes / altura_necessaria
+        fonte_label *= fator
+        fonte_valor *= fator
+        passo_linha = max(fonte_label, fonte_valor) + (gap_linha * fator)
+
+    c.setFont("Helvetica-Bold", fonte_label)
+    largura_labels = max(
+        c.stringWidth(f"{titulo}:", "Helvetica-Bold", fonte_label) for titulo, _ in linhas
+    )
+    gap_label_valor = max(4, 2.4 * MM_TO_POINTS * escala_etiqueta)
+    valor_x = area_x + largura_labels + gap_label_valor
+
+    y_linha = y_detalhes_topo - max(fonte_label, fonte_valor)
+    for titulo, valor in linhas:
+        c.setFont("Helvetica-Bold", fonte_label)
+        c.drawString(area_x, y_linha, f"{titulo}:")
+        c.setFont("Helvetica", fonte_valor)
+        c.drawString(valor_x, y_linha, valor)
+        y_linha -= passo_linha
+
+    codigo = dados["codigo_barras"]
+    largura_alvo = area_largura * 0.78
+    modulos_estimados = max(80, (11 * len(codigo)) + 35)
+    bar_width = _clamp(largura_alvo / modulos_estimados, 0.16, 1.6)
+    barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+
+    for _ in range(20):
+        if barcode.width > area_largura * 0.82 and bar_width > 0.14:
+            bar_width *= 0.95
+            barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+            continue
+        if barcode.width < area_largura * 0.72 and bar_width < 2.0:
+            bar_width *= 1.03
+            barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+            continue
+        break
+
+    codigo_y = area_y
+    barcode_y = codigo_y + altura_codigo + gap_barra_codigo
+    barcode_x = area_x + ((area_largura - barcode.width) / 2)
+    barcode.drawOn(c, barcode_x, barcode_y)
+
+    c.setFont("Helvetica", fonte_identificador)
+    id_y = barcode_y + altura_barcode + gap_identificador_barra
+    c.drawCentredString(area_x + (area_largura / 2), id_y, dados["id_fedex_data"])
+
+    c.setFont("Helvetica", fonte_codigo)
+    c.drawCentredString(area_x + (area_largura / 2), codigo_y, codigo)
+
+    c.showPage()
+    c.save()
+    return buffer.getvalue()
+
+
+def _inicializar_estado() -> None:
+    if "resultado" not in st.session_state:
+        st.session_state["resultado"] = None
+    if "pdf_bytes" not in st.session_state:
+        st.session_state["pdf_bytes"] = None
+    if "erros" not in st.session_state:
+        st.session_state["erros"] = []
+
+
+def main() -> None:
+    st.set_page_config(page_title=APP_NAME, layout="wide")
+    _inicializar_estado()
+
+    st.title(APP_NAME)
+    st.caption("Versao Streamlit para teste e publicacao no Streamlit Cloud.")
+
+    with st.form("form_etiqueta", clear_on_submit=False):
+        col1, col2 = st.columns(2)
+        destino = col1.selectbox("Destino *", [""] + DESTINOS, index=0)
+        projeto = col2.selectbox("Projeto *", [""] + PROJETOS, index=0)
+
+        prefixo_romaneio = PREFIXOS_ROMANEIO.get(projeto, "")
+        colr1, colr2 = st.columns([1, 2])
+        colr1.text_input("Prefixo Romaneio", value=prefixo_romaneio, disabled=True)
+        romaneio_sufixo = colr2.text_input(
+            "Romaneio (somente numeros apos /) *", max_chars=20
+        ).strip()
+
+        coln1, coln2 = st.columns(2)
+        nr_nf = coln1.text_input("NR NF *", max_chars=20).strip()
+        id_fedex = coln2.text_input("ID FEDEX *", max_chars=20).strip()
+
+        colv1, colv2 = st.columns(2)
+        volume_atual = colv1.text_input("Volume Atual *", max_chars=3).strip()
+        volume_total = colv2.text_input("Volume Total *", max_chars=3).strip()
+
+        st.markdown("**Configuracao da Etiqueta**")
+        colc1, colc2, colc3, colc4 = st.columns(4)
+        largura_mm = float(colc1.number_input("Largura (mm)", min_value=1.0, value=105.0))
+        altura_mm = float(colc2.number_input("Altura (mm)", min_value=1.0, value=148.5))
+        espacamento_linhas = float(
+            colc3.number_input("Espacamento linhas (pt)", min_value=0.0, value=3.5)
+        )
+        escala_fonte = float(colc4.number_input("Escala de fonte", min_value=0.1, value=1.0))
+
+        gerar = st.form_submit_button("Gerar etiqueta")
+
+    if gerar:
+        entradas = {
+            "destino": destino,
+            "projeto": projeto,
+            "romaneio_sufixo": romaneio_sufixo,
+            "nr_nf": nr_nf,
+            "id_fedex": id_fedex,
+            "volume_atual": volume_atual,
+            "volume_total": volume_total,
+            "largura_mm": largura_mm,
+            "altura_mm": altura_mm,
+            "espacamento_linhas": espacamento_linhas,
+            "escala_fonte": escala_fonte,
+        }
+
+        st.session_state["erros"] = _validar_entradas(entradas)
+        st.session_state["resultado"] = None
+        st.session_state["pdf_bytes"] = None
+
+        if st.session_state["erros"]:
+            pass
+        else:
+            dados = _montar_dados(entradas)
+            st.session_state["resultado"] = {"dados": dados, "config": entradas}
+            if REPORTLAB_AVAILABLE:
+                st.session_state["pdf_bytes"] = _gerar_pdf_bytes(
+                    dados,
+                    largura_mm=largura_mm,
+                    altura_mm=altura_mm,
+                    espacamento_extra=espacamento_linhas,
+                    escala_fonte_usuario=escala_fonte,
+                )
+
+    if st.session_state["erros"]:
+        for erro in st.session_state["erros"]:
+            st.error(erro)
+
+    resultado = st.session_state.get("resultado")
+    if resultado:
+        dados = resultado["dados"]
+        st.success("Etiqueta validada e pronta para PDF.")
+
+        st.markdown("**Preview dos dados**")
+        st.code(
+            (
+                f"Destino: {dados['destino']}\n"
+                f"Projeto: {dados['projeto']}\n"
+                f"Romaneio: {dados['romaneio']}\n"
+                f"NR NF: {dados['nr_nf']}\n"
+                f"ID FEDEX: {dados['id_fedex_data']}\n"
+                f"Volume: {dados['volume']}\n"
+                f"Codigo de barras: {dados['codigo_barras']}"
+            ),
+            language="text",
+        )
+
+        if not REPORTLAB_AVAILABLE:
+            st.warning("Instale o reportlab para gerar PDF: pip install reportlab")
+        else:
+            nome_arquivo = f"etiqueta_{datetime.now():%Y%m%d_%H%M%S}.pdf"
+            st.download_button(
+                "Baixar etiqueta em PDF",
+                data=st.session_state["pdf_bytes"],
+                file_name=nome_arquivo,
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+    st.markdown("---")
+    st.caption(
+        "Para Streamlit Cloud, publique este arquivo no GitHub e configure as dependencias "
+        "(streamlit e reportlab)."
+    )
+
+
+if __name__ == "__main__":
+    main()
