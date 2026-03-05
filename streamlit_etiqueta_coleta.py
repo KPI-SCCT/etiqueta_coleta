@@ -474,7 +474,7 @@ def main() -> None:
     st.markdown("---")
     st.caption(
         ""
-        "(streamlit e reportlab)."
+        ""
     )
 
 
