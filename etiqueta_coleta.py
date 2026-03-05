@@ -436,6 +436,46 @@ class EtiquetaColetaApp:
             return None, None
         return espacamento_extra, escala_fonte
 
+    def _layout_paginas_a4(
+        self, largura_pt: float, altura_pt: float, exibir_erro: bool = True
+    ) -> dict | None:
+        pagina_largura, pagina_altura = A4
+        margem = 12 * MM_TO_POINTS
+        gap = 4 * MM_TO_POINTS
+        area_largura = pagina_largura - (2 * margem)
+        area_altura = pagina_altura - (2 * margem)
+
+        colunas = int((area_largura + gap) // (largura_pt + gap))
+        linhas = int((area_altura + gap) // (altura_pt + gap))
+
+        if colunas < 1 or linhas < 1:
+            if exibir_erro:
+                messagebox.showerror(
+                    "Tamanho invalido",
+                    "Com esse tamanho de etiqueta nao cabe nenhuma unidade na folha A4.\n"
+                    "Reduza largura/altura.",
+                )
+            return None
+
+        x_inicial = margem
+        y_inicial = pagina_altura - margem - altura_pt
+        passo_x = largura_pt + gap
+        passo_y = altura_pt + gap
+
+        posicoes = []
+        for linha in range(linhas):
+            for coluna in range(colunas):
+                x = x_inicial + (coluna * passo_x)
+                y = y_inicial - (linha * passo_y)
+                posicoes.append((x, y))
+
+        return {
+            "colunas": colunas,
+            "linhas": linhas,
+            "por_pagina": colunas * linhas,
+            "posicoes": posicoes,
+        }
+
     def _desenhar_etiqueta_pdf(
         self,
         c,
@@ -577,22 +617,23 @@ class EtiquetaColetaApp:
         espacamento_extra, escala_fonte_usuario = self._ajustes_layout()
         if espacamento_extra is None or escala_fonte_usuario is None:
             return False
+        layout = self._layout_paginas_a4(largura_pt, altura_pt, exibir_erro=True)
+        if not layout:
+            return False
 
         try:
             caminho_pdf = Path(caminho_pdf)
             caminho_pdf.parent.mkdir(parents=True, exist_ok=True)
 
-            _, page_h = A4
-            margem = 12 * MM_TO_POINTS
-            x = margem
-            y = page_h - margem - altura_pt
-            if y < margem:
-                y = margem
-
             c = canvas.Canvas(str(caminho_pdf), pagesize=A4)
             c.setTitle(APP_NAME)
 
-            for etiqueta in dados_lote["etiquetas"]:
+            for indice, etiqueta in enumerate(dados_lote["etiquetas"]):
+                indice_slot = indice % layout["por_pagina"]
+                if indice > 0 and indice_slot == 0:
+                    c.showPage()
+
+                x, y = layout["posicoes"][indice_slot]
                 self._desenhar_etiqueta_pdf(
                     c,
                     x,
@@ -603,7 +644,8 @@ class EtiquetaColetaApp:
                     espacamento_extra,
                     escala_fonte_usuario,
                 )
-                c.showPage()
+
+            c.showPage()
 
             c.save()
             return True
@@ -633,9 +675,20 @@ class EtiquetaColetaApp:
             return
 
         if self._gerar_pdf_etiqueta(Path(caminho), dados):
+            largura_pt, altura_pt = self._tamanho_etiqueta_points()
+            layout = None
+            if largura_pt and altura_pt:
+                layout = self._layout_paginas_a4(largura_pt, altura_pt, exibir_erro=False)
+            por_folha = layout["por_pagina"] if layout else 1
+            total = len(dados["etiquetas"])
+            folhas = (total + por_folha - 1) // por_folha
             messagebox.showinfo(
                 "PDF gerado",
-                f"Etiquetas salvas em:\n{caminho}\n\nQuantidade: {len(dados['etiquetas'])}",
+                "Etiquetas salvas em:\n"
+                f"{caminho}\n\n"
+                f"Quantidade: {total}\n"
+                f"Etiquetas por folha: {por_folha}\n"
+                f"Folhas estimadas: {folhas}",
             )
 
     def _carregar_impressoras(self) -> None:
@@ -687,11 +740,20 @@ class EtiquetaColetaApp:
                 win32api.ShellExecute(
                     0, "printto", str(arquivo_temp), f'"{impressora}"', ".", 0
                 )
+            largura_pt, altura_pt = self._tamanho_etiqueta_points()
+            layout = None
+            if largura_pt and altura_pt:
+                layout = self._layout_paginas_a4(largura_pt, altura_pt, exibir_erro=False)
+            por_folha = layout["por_pagina"] if layout else 1
+            total = len(dados["etiquetas"])
+            folhas = (total + por_folha - 1) // por_folha
             messagebox.showinfo(
                 "Impressao enviada",
                 "Etiquetas enviadas para impressao.\n"
                 f"Impressora: {impressora}\n"
-                f"Quantidade: {len(dados['etiquetas'])}",
+                f"Quantidade: {total}\n"
+                f"Etiquetas por folha: {por_folha}\n"
+                f"Folhas estimadas: {folhas}",
             )
         except Exception as erro:
             messagebox.showerror(

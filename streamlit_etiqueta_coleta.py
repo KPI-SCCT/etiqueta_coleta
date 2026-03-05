@@ -128,6 +128,41 @@ def _montar_dados(entradas: dict) -> dict:
     }
 
 
+def _layout_paginas_a4(largura_pt: float, altura_pt: float) -> dict | None:
+    if not REPORTLAB_AVAILABLE or A4 is None:
+        return None
+
+    pagina_largura, pagina_altura = A4
+    margem = 12 * MM_TO_POINTS
+    gap = 4 * MM_TO_POINTS
+    area_largura = pagina_largura - (2 * margem)
+    area_altura = pagina_altura - (2 * margem)
+
+    colunas = int((area_largura + gap) // (largura_pt + gap))
+    linhas = int((area_altura + gap) // (altura_pt + gap))
+    if colunas < 1 or linhas < 1:
+        return None
+
+    x_inicial = margem
+    y_inicial = pagina_altura - margem - altura_pt
+    passo_x = largura_pt + gap
+    passo_y = altura_pt + gap
+
+    posicoes = []
+    for linha in range(linhas):
+        for coluna in range(colunas):
+            x = x_inicial + (coluna * passo_x)
+            y = y_inicial - (linha * passo_y)
+            posicoes.append((x, y))
+
+    return {
+        "colunas": colunas,
+        "linhas": linhas,
+        "por_pagina": colunas * linhas,
+        "posicoes": posicoes,
+    }
+
+
 def _desenhar_etiqueta_pdf(
     c,
     x: float,
@@ -266,14 +301,19 @@ def _gerar_pdf_bytes(
     c = canvas.Canvas(buffer, pagesize=A4)
     c.setTitle(APP_NAME)
 
-    _, page_h = A4
-    margem = 12 * MM_TO_POINTS
-    x = margem
-    y = page_h - margem - altura_pt
-    if y < margem:
-        y = margem
+    layout = _layout_paginas_a4(largura_pt, altura_pt)
+    if not layout:
+        raise ValueError(
+            "Com esse tamanho de etiqueta nao cabe nenhuma unidade na folha A4. "
+            "Reduza largura/altura."
+        )
 
-    for etiqueta in dados_lote["etiquetas"]:
+    for indice, etiqueta in enumerate(dados_lote["etiquetas"]):
+        indice_slot = indice % layout["por_pagina"]
+        if indice > 0 and indice_slot == 0:
+            c.showPage()
+
+        x, y = layout["posicoes"][indice_slot]
         _desenhar_etiqueta_pdf(
             c,
             x,
@@ -284,7 +324,8 @@ def _gerar_pdf_bytes(
             espacamento_extra,
             escala_fonte_usuario,
         )
-        c.showPage()
+
+    c.showPage()
 
     c.save()
     return buffer.getvalue()
@@ -331,7 +372,7 @@ def main() -> None:
         largura_mm = float(colc1.number_input("Largura (mm)", min_value=1.0, value=105.0))
         altura_mm = float(colc2.number_input("Altura (mm)", min_value=1.0, value=148.5))
         espacamento_linhas = float(
-            colc3.number_input("Espacamento linhas (pt)", min_value=0.0, value=3.5)
+            colc3.number_input("Espaçamento linhas (pt)", min_value=0.0, value=3.5)
         )
         escala_fonte = float(colc4.number_input("Escala de fonte", min_value=0.1, value=1.0))
 
@@ -361,13 +402,17 @@ def main() -> None:
             dados = _montar_dados(entradas)
             st.session_state["resultado"] = {"dados": dados, "config": entradas}
             if REPORTLAB_AVAILABLE:
-                st.session_state["pdf_bytes"] = _gerar_pdf_bytes(
-                    dados,
-                    largura_mm=largura_mm,
-                    altura_mm=altura_mm,
-                    espacamento_extra=espacamento_linhas,
-                    escala_fonte_usuario=escala_fonte,
-                )
+                try:
+                    st.session_state["pdf_bytes"] = _gerar_pdf_bytes(
+                        dados,
+                        largura_mm=largura_mm,
+                        altura_mm=altura_mm,
+                        espacamento_extra=espacamento_linhas,
+                        escala_fonte_usuario=escala_fonte,
+                    )
+                except Exception as erro:
+                    st.session_state["erros"].append(str(erro))
+                    st.session_state["resultado"] = None
 
     if st.session_state["erros"]:
         for erro in st.session_state["erros"]:
@@ -378,6 +423,16 @@ def main() -> None:
         dados = resultado["dados"]
         etiquetas = dados["etiquetas"]
         st.success(f"Etiquetas validadas e prontas para PDF. Quantidade: {len(etiquetas)}.")
+
+        largura_pt = resultado["config"]["largura_mm"] * MM_TO_POINTS
+        altura_pt = resultado["config"]["altura_mm"] * MM_TO_POINTS
+        layout = _layout_paginas_a4(largura_pt, altura_pt)
+        if layout:
+            por_folha = layout["por_pagina"]
+            folhas = (len(etiquetas) + por_folha - 1) // por_folha
+            st.info(
+                f"Etiquetas por folha A4: {por_folha} | Folhas estimadas: {folhas}"
+            )
 
         limite_preview = 120
         linhas_preview = [
