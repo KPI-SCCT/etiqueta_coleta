@@ -19,20 +19,20 @@ except Exception:
 
 APP_NAME = "COLETA"
 DESTINOS = ["CTDI DO BR - SP", "FLEXTRONIC", "FEDEX CAJAMAR - SP"]
-PROJETOS = ["CIELO - POS", "CIELO - TEF", "CIELO - TRANSF", "FISERV", "MOOZ", "STONE", "PICPAY", "PAGBANK", "CTRENDS", "C6BANK", "ADYEN", "CLOUDWALK"]
+PROJETOS = ["CIELO - POS (1.2/)", "CIELO - TEF (2.2/)", "CIELO - TRANSF (1.3/)", "FISERV (34.3/)", "MOOZ (42.3/)", "STONE (41.3/)", "PICPAY (49.3/)", "PAGBANK (53.3/)", "CTRENDS (39.3/)", "C6BANK (43.3/)", "ADYEN (45.3/)", "CLOUDWALK (40.3/)"]
 PREFIXOS_ROMANEIO = {
-    "CIELO - POS": "1.2/",
-    "CIELO - TEF": "2.2/",
-    "CIELO - TRANSF": "1.3/",
-    "FISERV": "34.3/",
-    "MOOZ": "42.3/",
-    "STONE": "41.3/",
-    "PICPAY": "49.3/",
-    "PAGBANK": "53.3/",
-    "CTRENDS": "39.3/",
-    "C6BANK": "43.3/",
-    "ADYEN": "45.3/",
-    "CLOUDWALK": "40.3/",
+    "CIELO - POS (1.2/)": "1.2/",
+    "CIELO - TEF (2.2/)": "2.2/",
+    "CIELO - TRANSF (1.3/)": "1.3/",
+    "FISERV (34.3/)": "34.3/",
+    "MOOZ (42.3/)": "42.3/",
+    "STONE (41.3/)": "41.3/",
+    "PICPAY (49.3/)": "49.3/",
+    "PAGBANK (53.3/)": "53.3/",
+    "CTRENDS (39.3/)": "39.3/",
+    "C6BANK (43.3/)": "43.3/",
+    "ADYEN (45.3/)": "45.3/",
+    "CLOUDWALK (40.3/)": "40.3/",
     
 }
 MM_TO_POINTS = 72 / 25.4
