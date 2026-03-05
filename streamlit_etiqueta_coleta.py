@@ -369,12 +369,12 @@ def main() -> None:
 
         st.markdown("**Configuracao da Etiqueta**")
         colc1, colc2, colc3, colc4 = st.columns(4)
-        largura_mm = float(colc1.number_input("Largura (mm)", min_value=1.0, value=105.0))
-        altura_mm = float(colc2.number_input("Altura (mm)", min_value=1.0, value=148.5))
+        largura_mm = float(colc1.number_input("Largura (mm)", min_value=1.0, value=90.0))
+        altura_mm = float(colc2.number_input("Altura (mm)", min_value=1.0, value=100.0))
         espacamento_linhas = float(
-            colc3.number_input("Espaçamento linhas (pt)", min_value=0.0, value=3.5)
+            colc3.number_input("Espaçamento linhas (pt)", min_value=0.0, value=5.0)
         )
-        escala_fonte = float(colc4.number_input("Escala de fonte", min_value=0.1, value=1.0))
+        escala_fonte = float(colc4.number_input("Escala de fonte", min_value=0.1, value=2.5))
 
         gerar = st.form_submit_button("Gerar etiqueta")
 
