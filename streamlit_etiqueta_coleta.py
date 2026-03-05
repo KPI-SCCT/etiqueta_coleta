@@ -345,7 +345,7 @@ def main() -> None:
     _inicializar_estado()
 
     st.title(APP_NAME)
-    st.caption("Versao Streamlit para teste e publicacao no Streamlit Cloud.")
+    st.caption("Versao online para geração de etiquetas.")
 
     with st.form("form_etiqueta", clear_on_submit=False):
         col1, col2 = st.columns(2)
@@ -473,7 +473,7 @@ def main() -> None:
 
     st.markdown("---")
     st.caption(
-        "Para Streamlit Cloud, publique este arquivo no GitHub e configure as dependencias "
+        ""
         "(streamlit e reportlab)."
     )
 
