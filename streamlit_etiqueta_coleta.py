@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 
 import streamlit as st
 
@@ -16,10 +17,42 @@ except Exception:
     canvas = None
     REPORTLAB_AVAILABLE = False
 
+try:
+    from openpyxl import load_workbook
+
+    OPENPYXL_AVAILABLE = True
+except Exception:
+    load_workbook = None
+    OPENPYXL_AVAILABLE = False
+
 
 APP_NAME = "COLETA"
-DESTINOS = ["CTDI DO BR - SP", "FLEXTRONIC", "FEDEX CAJAMAR - SP"]
-PROJETOS = ["CIELO - POS", "CIELO - TEF", "CIELO - TRANSF", "FISERV", "MOOZ", "STONE", "PICPAY", "PAGBANK", "CTRENDS", "C6BANK", "ADYEN", "CLOUDWALK", "REDE"]
+PROJETO_REDE = "REDE"
+PLANILHA_BASE_CRED = "bases padrão + cred.xlsx"
+
+DESTINOS = [
+    "CTDI DO BR - SP",
+    "FLEXTRONIC",
+    "FEDEX CAJAMAR - SP",
+    "DHL LOUVEIRA - SP",
+]
+
+PROJETOS = [
+    "CIELO - POS",
+    "CIELO - TEF",
+    "CIELO - TRANSF",
+    "FISERV",
+    "MOOZ",
+    "STONE",
+    "PICPAY",
+    "PAGBANK",
+    "CTRENDS",
+    "C6BANK",
+    "ADYEN",
+    "CLOUDWALK",
+    PROJETO_REDE,
+]
+
 PREFIXOS_ROMANEIO = {
     "CIELO - POS": "1.2/",
     "CIELO - TEF": "2.2/",
@@ -33,162 +66,271 @@ PREFIXOS_ROMANEIO = {
     "C6BANK": "43.3/",
     "ADYEN": "45.3/",
     "CLOUDWALK": "40.3/",
-    "REDE": "51.2",
-    
+    PROJETO_REDE: "51.2/",
 }
+
+CRED_OPTIONS = [
+    ("CRED369", "POLO REDE PONTA GROSSA"),
+    ("CRED385", "POLO REDE SJ DOS CAMPOS"),
+    ("CRED368", "POLO REDE SANTOS"),
+    ("CRED372", "POLO REDE CUR PINHAIS"),
+    ("CRED382", "POLO REDE LONDRINA"),
+    ("CRED371", "POLO REDE CURITIBA"),
+    ("CRED370", "POLO REDE MARINGA"),
+    ("CRED384", "POLO REDE PINDA"),
+    ("CRED383", "POLO REDE CASCAVEL"),
+    ("CRED408", "POLO REDE FORTALEZA"),
+    ("CRED409", "POLO REDE JUAZ DO NORTE"),
+    ("CRED421", "POLO REDE BH"),
+    ("CRED412", "POLO REDE JUIZ DE FORA"),
+    ("CRED411", "POLO REDE TEOFILO OTONI"),
+    ("CRED419", "POLO REDE GOV VALADARES"),
+    ("CRED416", "POLO REDE MONTES CLAROS"),
+    ("CRED422", "POLO REDE IPATINGA"),
+    ("CRED425", "POLO REDE GUARULHOS"),
+]
+CRED_CODES = [code for code, _ in CRED_OPTIONS]
+
 MM_TO_POINTS = 72 / 25.4
+DEFAULT_CONFIG_OUTROS = {
+    "largura_mm": 90.0,
+    "altura_mm": 100.0,
+    "espacamento_pt": 5.0,
+    "escala_fonte": 2.5,
+}
+DEFAULT_CONFIG_REDE = {
+    "largura_mm": 150.0,
+    "altura_mm": 100.0,
+    "espacamento_pt": 5.0,
+    "escala_fonte": 1.8,
+}
 
 
-def _clamp(valor: float, minimo: float, maximo: float) -> float:
-    return max(minimo, min(valor, maximo))
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(value, maximum))
 
 
-def _apenas_numeros(valor: str) -> str:
-    return re.sub(r"\D", "", valor or "")
+def _apenas_numeros(value: str) -> str:
+    return re.sub(r"\D", "", value or "")
 
 
-def _campo_obrigatorio_numerico(nome: str, valor: str) -> str | None:
+@st.cache_data(show_spinner=False)
+def _carregar_origens_e_cred() -> tuple[list[str], dict[str, str], str | None]:
+    path = Path(__file__).with_name(PLANILHA_BASE_CRED)
+    if not path.exists():
+        return [], {}, f"Planilha nao encontrada: {PLANILHA_BASE_CRED}"
+    if not OPENPYXL_AVAILABLE:
+        return [], {}, "Biblioteca openpyxl nao encontrada para leitura da planilha."
+
+    wb = load_workbook(path, data_only=True, read_only=True)
+    ws = wb.active
+    origens: list[str] = []
+    origem_para_cred: dict[str, str] = {}
+
+    for row in ws.iter_rows(min_row=2, max_col=4, values_only=True):
+        origem_raw = row[0]
+        cred_raw = row[2]
+        if origem_raw is None:
+            continue
+        origem = str(origem_raw).strip()
+        if not origem:
+            continue
+        if origem not in origens:
+            origens.append(origem)
+
+        if cred_raw is not None and str(cred_raw).strip():
+            origem_para_cred[origem] = str(cred_raw).strip().upper()
+
+    return origens, origem_para_cred, None
+
+
+def _erro_numero_obrigatorio(campo: str, valor: str, max_digitos: int | None = None) -> str | None:
     if not valor:
-        return f"O campo '{nome}' e obrigatorio."
+        return f"O campo '{campo}' e obrigatorio."
     if not valor.isdigit():
-        return f"O campo '{nome}' aceita apenas numeros."
+        return f"O campo '{campo}' aceita apenas numeros."
+    if max_digitos and len(valor) > max_digitos:
+        return f"O campo '{campo}' permite no maximo {max_digitos} digitos."
     return None
 
 
 def _validar_entradas(entradas: dict) -> list[str]:
     erros: list[str] = []
-
+    if not entradas["origem"]:
+        erros.append("O campo 'Origem' e obrigatorio.")
     if not entradas["destino"]:
         erros.append("O campo 'Destino' e obrigatorio.")
     if not entradas["projeto"]:
         erros.append("O campo 'Projeto' e obrigatorio.")
 
-    for nome, chave in [
-        ("Romaneio", "romaneio_sufixo"),
-        ("NR NF", "nr_nf"),
-        ("ID FEDEX", "id_fedex"),
-        ("Volume", "volume_total"),
-    ]:
-        erro = _campo_obrigatorio_numerico(nome, entradas[chave])
-        if erro:
-            erros.append(erro)
+    if entradas["projeto"] == PROJETO_REDE:
+        tecnologia = (entradas.get("tecnologia") or "").strip().upper()
+        if not tecnologia:
+            erros.append("O campo 'Tecnologia' e obrigatorio.")
+        elif len(tecnologia) > 3:
+            erros.append("O campo 'Tecnologia' permite no maximo 3 caracteres.")
+        elif not re.fullmatch(r"[A-Za-z]{1,3}", tecnologia):
+            erros.append("O campo 'Tecnologia' aceita apenas letras.")
 
-    if entradas["volume_total"] and len(entradas["volume_total"]) > 3:
-        erros.append("O campo 'Volume' permite no maximo 3 digitos.")
-    if (
-        entradas["volume_total"]
-        and entradas["volume_total"].isdigit()
-        and int(entradas["volume_total"]) <= 0
-    ):
-        erros.append("O campo 'Volume' deve ser maior que zero.")
+        err_nf = _erro_numero_obrigatorio("Nota Fiscal", entradas.get("nota_fiscal", ""), 8)
+        if err_nf:
+            erros.append(err_nf)
+        err_os = _erro_numero_obrigatorio("OS", entradas.get("os", ""), 10)
+        if err_os:
+            erros.append(err_os)
+        if not entradas.get("numero_cred"):
+            erros.append("O campo 'Numero CRED' e obrigatorio.")
+    else:
+        err_rom = _erro_numero_obrigatorio("Romaneio", entradas.get("romaneio_sufixo", ""))
+        if err_rom:
+            erros.append(err_rom)
+        err_nf = _erro_numero_obrigatorio("NR NF", entradas.get("nr_nf", ""))
+        if err_nf:
+            erros.append(err_nf)
+        err_id = _erro_numero_obrigatorio("ID FEDEX", entradas.get("id_fedex", ""))
+        if err_id:
+            erros.append(err_id)
+        err_vol = _erro_numero_obrigatorio("Volume", entradas.get("volume_total", ""), 3)
+        if err_vol:
+            erros.append(err_vol)
+        elif int(entradas["volume_total"]) <= 0:
+            erros.append("O campo 'Volume' deve ser maior que zero.")
 
     if entradas["largura_mm"] <= 0 or entradas["altura_mm"] <= 0:
         erros.append("Largura e altura da etiqueta devem ser maiores que zero.")
     if entradas["espacamento_linhas"] < 0:
-        erros.append("O espacamento de linhas deve ser maior ou igual a zero.")
+        erros.append("Espacamento de linhas deve ser maior ou igual a zero.")
     if entradas["escala_fonte"] <= 0:
-        erros.append("A escala de fonte deve ser maior que zero.")
-
+        erros.append("Escala de fonte deve ser maior que zero.")
+    if entradas["ajuste_cabecalho"] < 0:
+        erros.append("Ajuste cabecalho deve ser maior ou igual a zero.")
+    if entradas["ajuste_rodape"] < 0:
+        erros.append("Ajuste rodape deve ser maior ou igual a zero.")
     return erros
 
 
-def _montar_dados(entradas: dict) -> dict:
+def _montar_dados_padrao(entradas: dict) -> dict:
     prefixo = PREFIXOS_ROMANEIO[entradas["projeto"]]
     romaneio = f"{prefixo}{entradas['romaneio_sufixo']}"
-    total_volumes = int(entradas["volume_total"])
-    vol_total_fmt = str(total_volumes).zfill(3)
-    base_codigo = _apenas_numeros(romaneio)
+    total = int(entradas["volume_total"])
+    total_fmt = str(total).zfill(3)
+    codigo_base = _apenas_numeros(romaneio)
     data_emissao = datetime.now().strftime("%d/%m/%Y")
     id_fedex_data = f"{entradas['id_fedex']} - {data_emissao}"
 
     etiquetas = []
-    for indice in range(1, total_volumes + 1):
-        vol_atual_fmt = str(indice).zfill(3)
-        volume_fmt = f"{vol_atual_fmt}/{vol_total_fmt}"
+    for i in range(1, total + 1):
+        atual_fmt = str(i).zfill(3)
+        volume = f"{atual_fmt}/{total_fmt}"
         etiquetas.append(
             {
+                "mode": "PADRAO",
+                "origem": entradas["origem"],
                 "destino": entradas["destino"],
                 "projeto": entradas["projeto"],
                 "romaneio": romaneio,
                 "nr_nf": entradas["nr_nf"],
                 "id_fedex_data": id_fedex_data,
-                "volume": volume_fmt,
-                "codigo_barras": f"{base_codigo}{vol_atual_fmt}{vol_total_fmt}",
+                "volume": volume,
+                "codigo_barras": f"{codigo_base}{atual_fmt}{total_fmt}",
             }
         )
 
     return {
+        "mode": "PADRAO",
+        "origem": entradas["origem"],
         "destino": entradas["destino"],
         "projeto": entradas["projeto"],
         "romaneio": romaneio,
         "nr_nf": entradas["nr_nf"],
-        "id_fedex": entradas["id_fedex"],
         "id_fedex_data": id_fedex_data,
-        "volume_total": total_volumes,
         "etiquetas": etiquetas,
     }
+
+
+def _montar_dados_rede(entradas: dict) -> dict:
+    data_emissao = datetime.now().strftime("%d/%m/%Y")
+    etiqueta = {
+        "mode": "REDE",
+        "titulo": "OPERACAO REVERSA",
+        "tecnologia": entradas["tecnologia"].strip().upper(),
+        "origem": entradas["origem"],
+        "destino": entradas["destino"],
+        "numero_cred": entradas["numero_cred"],
+        "nota_fiscal": entradas["nota_fiscal"],
+        "data_emissao": data_emissao,
+        "os": entradas["os"],
+        "volume": "-",
+    }
+    return {
+        "mode": "REDE",
+        "origem": entradas["origem"],
+        "destino": entradas["destino"],
+        "projeto": entradas["projeto"],
+        "etiquetas": [etiqueta],
+    }
+
+
+def _montar_dados(entradas: dict) -> dict:
+    if entradas["projeto"] == PROJETO_REDE:
+        return _montar_dados_rede(entradas)
+    return _montar_dados_padrao(entradas)
 
 
 def _layout_paginas_a4(largura_pt: float, altura_pt: float) -> dict | None:
     if not REPORTLAB_AVAILABLE or A4 is None:
         return None
 
-    pagina_largura, pagina_altura = A4
+    pagina_w, pagina_h = A4
     margem = 12 * MM_TO_POINTS
     gap = 4 * MM_TO_POINTS
-    area_largura = pagina_largura - (2 * margem)
-    area_altura = pagina_altura - (2 * margem)
+    area_w = pagina_w - (2 * margem)
+    area_h = pagina_h - (2 * margem)
 
-    colunas = int((area_largura + gap) // (largura_pt + gap))
-    linhas = int((area_altura + gap) // (altura_pt + gap))
-    if colunas < 1 or linhas < 1:
+    cols = int((area_w + gap) // (largura_pt + gap))
+    rows = int((area_h + gap) // (altura_pt + gap))
+    if cols < 1 or rows < 1:
         return None
 
-    x_inicial = margem
-    y_inicial = pagina_altura - margem - altura_pt
-    passo_x = largura_pt + gap
-    passo_y = altura_pt + gap
+    x0 = margem
+    y0 = pagina_h - margem - altura_pt
+    step_x = largura_pt + gap
+    step_y = altura_pt + gap
 
-    posicoes = []
-    for linha in range(linhas):
-        for coluna in range(colunas):
-            x = x_inicial + (coluna * passo_x)
-            y = y_inicial - (linha * passo_y)
-            posicoes.append((x, y))
+    positions = []
+    for row in range(rows):
+        for col in range(cols):
+            positions.append((x0 + col * step_x, y0 - row * step_y))
 
-    return {
-        "colunas": colunas,
-        "linhas": linhas,
-        "por_pagina": colunas * linhas,
-        "posicoes": posicoes,
-    }
+    return {"por_pagina": cols * rows, "positions": positions}
 
 
-def _desenhar_etiqueta_pdf(
+def _desenhar_etiqueta_padrao_pdf(
     c,
-    x: float,
-    y: float,
-    largura_pt: float,
-    altura_pt: float,
-    dados: dict,
-    espacamento_extra: float,
-    escala_fonte_usuario: float,
-) -> None:
-    referencia_largura = 105 * MM_TO_POINTS
-    referencia_altura = 148.5 * MM_TO_POINTS
-    escala_etiqueta = min(largura_pt / referencia_largura, altura_pt / referencia_altura)
+    x,
+    y,
+    largura_pt,
+    altura_pt,
+    dados,
+    espacamento_extra,
+    escala_fonte_usuario,
+    ajuste_cabecalho=0.0,
+    ajuste_rodape=0.0,
+):
+    ref_w = 105 * MM_TO_POINTS
+    ref_h = 148.5 * MM_TO_POINTS
+    scale = min(largura_pt / ref_w, altura_pt / ref_h)
 
-    borda = _clamp(0.85 * escala_etiqueta, 0.6, 1.4)
-    c.setLineWidth(borda)
+    border = _clamp(0.85 * scale, 0.6, 1.4)
+    c.setLineWidth(border)
     c.rect(x, y, largura_pt, altura_pt)
 
-    pad = max(3.5 * MM_TO_POINTS, 6 * MM_TO_POINTS * escala_etiqueta)
-    area_x = x + pad
-    area_y = y + pad
-    area_largura = largura_pt - (2 * pad)
-    area_altura = altura_pt - (2 * pad)
+    pad = max(3.5 * MM_TO_POINTS, 6 * MM_TO_POINTS * scale)
+    ax, ay = x + pad, y + pad
+    aw, ah = largura_pt - (2 * pad), altura_pt - (2 * pad)
 
-    linhas = [
+    lines = [
+        ("ORIGEM", dados["origem"]),
         ("DESTINO", dados["destino"]),
         ("ROMANEIO", dados["romaneio"]),
         ("PROJETO", dados["projeto"]),
@@ -196,93 +338,156 @@ def _desenhar_etiqueta_pdf(
         ("VOLUME", dados["volume"]),
     ]
 
-    fonte_titulo = _clamp(12 * escala_etiqueta * escala_fonte_usuario, 8, 28)
-    fonte_label = _clamp(9.2 * escala_etiqueta * escala_fonte_usuario, 6, 20)
-    fonte_valor = _clamp(9.8 * escala_etiqueta * escala_fonte_usuario, 6, 20)
-    fonte_codigo = _clamp(8.2 * escala_etiqueta * escala_fonte_usuario, 6, 16)
-    fonte_identificador = _clamp(7.0 * escala_etiqueta * escala_fonte_usuario, 5.5, 12)
-    gap_linha = max(2.2, 1.8 * MM_TO_POINTS * escala_etiqueta) + espacamento_extra
-    gap_bloco = max(4.0, 3 * MM_TO_POINTS * escala_etiqueta)
+    title_f = _clamp(12 * scale * escala_fonte_usuario, 8, 42)
+    label_f = _clamp(9.2 * scale * escala_fonte_usuario, 6, 30)
+    value_f = _clamp(9.8 * scale * escala_fonte_usuario, 6, 32)
+    code_f = _clamp(8.2 * scale * escala_fonte_usuario, 6, 24)
+    id_f = _clamp(7.0 * scale * escala_fonte_usuario, 5.5, 18)
+    gap = max(2.2, 1.8 * MM_TO_POINTS * scale) + (espacamento_extra * 1.35)
+    block_gap = max(4.0, 3 * MM_TO_POINTS * scale)
 
-    altura_codigo = fonte_codigo * 1.45
-    altura_identificador = fonte_identificador * 1.45
-    altura_barcode = _clamp(area_altura * 0.2, 10 * MM_TO_POINTS, area_altura * 0.26)
-    gap_identificador_barra = max(2.2, 1.4 * MM_TO_POINTS * escala_etiqueta)
-    gap_barra_codigo = max(2.2, 1.3 * MM_TO_POINTS * escala_etiqueta)
-    bloco_barcode_altura = (
-        altura_codigo
-        + gap_barra_codigo
-        + altura_barcode
-        + gap_identificador_barra
-        + altura_identificador
-    )
+    h_code = code_f * 1.45
+    h_id = id_f * 1.45
+    h_bar = _clamp(ah * 0.2, 10 * MM_TO_POINTS, ah * 0.26)
+    gap_id_bar = max(2.2, 1.4 * MM_TO_POINTS * scale)
+    gap_bar_code = max(2.2, 1.3 * MM_TO_POINTS * scale)
+    h_footer = h_code + gap_bar_code + h_bar + gap_id_bar + h_id
 
-    y_topo = area_y + area_altura
-    y_titulo = y_topo - fonte_titulo
-    c.setFont("Helvetica-Bold", fonte_titulo)
-    c.drawCentredString(x + (largura_pt / 2), y_titulo, APP_NAME)
+    y_top = ay + ah
+    y_title = y_top - title_f
+    c.setFont("Helvetica-Bold", title_f)
+    c.drawCentredString(x + largura_pt / 2, y_title, APP_NAME)
 
-    y_divisor = y_titulo - (gap_linha * 0.9)
-    c.setLineWidth(max(0.4, borda * 0.7))
-    c.line(area_x, y_divisor, area_x + area_largura, y_divisor)
+    y_div = y_title - (gap * 0.9)
+    c.setLineWidth(max(0.4, border * 0.7))
+    c.line(ax, y_div, ax + aw, y_div)
 
-    y_detalhes_topo = y_divisor - gap_bloco
-    y_detalhes_base = area_y + bloco_barcode_altura + gap_bloco
-    altura_disponivel_detalhes = y_detalhes_topo - y_detalhes_base
+    header_gap = max(block_gap, gap * 0.9) + ajuste_cabecalho + (espacamento_extra * 0.65)
+    y_details_top = y_div - header_gap
+    y_details_base = ay + h_footer + block_gap
+    available = y_details_top - y_details_base
 
-    passo_linha = max(fonte_label, fonte_valor) + gap_linha
-    altura_necessaria = (len(linhas) * max(fonte_label, fonte_valor)) + (
-        (len(linhas) - 1) * gap_linha
-    )
-    if altura_necessaria > altura_disponivel_detalhes and altura_disponivel_detalhes > 0:
-        fator = altura_disponivel_detalhes / altura_necessaria
-        fonte_label *= fator
-        fonte_valor *= fator
-        passo_linha = max(fonte_label, fonte_valor) + (gap_linha * fator)
+    step = max(label_f, value_f) + gap
+    needed = (len(lines) * max(label_f, value_f)) + ((len(lines) - 1) * gap)
+    if needed > available and available > 0:
+        factor = available / needed
+        label_f *= factor
+        value_f *= factor
+        step = max(label_f, value_f) + (gap * factor)
 
-    c.setFont("Helvetica-Bold", fonte_label)
-    largura_labels = max(
-        c.stringWidth(f"{titulo}:", "Helvetica-Bold", fonte_label) for titulo, _ in linhas
-    )
-    gap_label_valor = max(4, 2.4 * MM_TO_POINTS * escala_etiqueta)
-    valor_x = area_x + largura_labels + gap_label_valor
+    c.setFont("Helvetica-Bold", label_f)
+    label_w = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_f) for k, _ in lines)
+    value_x = ax + label_w + max(4, 2.4 * MM_TO_POINTS * scale)
 
-    y_linha = y_detalhes_topo - max(fonte_label, fonte_valor)
-    for titulo, valor in linhas:
-        c.setFont("Helvetica-Bold", fonte_label)
-        c.drawString(area_x, y_linha, f"{titulo}:")
-        c.setFont("Helvetica", fonte_valor)
-        c.drawString(valor_x, y_linha, valor)
-        y_linha -= passo_linha
+    y_line = y_details_top - max(label_f, value_f)
+    for k, v in lines:
+        c.setFont("Helvetica-Bold", label_f)
+        c.drawString(ax, y_line, f"{k}:")
+        c.setFont("Helvetica", value_f)
+        c.drawString(value_x, y_line, str(v))
+        y_line -= step
 
-    codigo = dados["codigo_barras"]
-    largura_alvo = area_largura * 0.78
-    modulos_estimados = max(80, (11 * len(codigo)) + 35)
-    bar_width = _clamp(largura_alvo / modulos_estimados, 0.16, 1.6)
-    barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
-
+    code = dados["codigo_barras"]
+    target_w = aw * 0.78
+    modules = max(80, (11 * len(code)) + 35)
+    bar_w = _clamp(target_w / modules, 0.16, 1.6)
+    bar = code128.Code128(code, barHeight=h_bar, barWidth=bar_w)
     for _ in range(20):
-        if barcode.width > area_largura * 0.82 and bar_width > 0.14:
-            bar_width *= 0.95
-            barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+        if bar.width > aw * 0.82 and bar_w > 0.14:
+            bar_w *= 0.95
+            bar = code128.Code128(code, barHeight=h_bar, barWidth=bar_w)
             continue
-        if barcode.width < area_largura * 0.72 and bar_width < 2.0:
-            bar_width *= 1.03
-            barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+        if bar.width < aw * 0.72 and bar_w < 2.0:
+            bar_w *= 1.03
+            bar = code128.Code128(code, barHeight=h_bar, barWidth=bar_w)
             continue
         break
 
-    codigo_y = area_y
-    barcode_y = codigo_y + altura_codigo + gap_barra_codigo
-    barcode_x = area_x + ((area_largura - barcode.width) / 2)
-    barcode.drawOn(c, barcode_x, barcode_y)
+    y_code = ay
+    y_bar = y_code + h_code + gap_bar_code
+    x_bar = ax + ((aw - bar.width) / 2)
+    bar.drawOn(c, x_bar, y_bar)
 
-    c.setFont("Helvetica", fonte_identificador)
-    id_y = barcode_y + altura_barcode + gap_identificador_barra
-    c.drawCentredString(area_x + (area_largura / 2), id_y, dados["id_fedex_data"])
+    c.setFont("Helvetica", id_f)
+    y_id = y_bar + h_bar + gap_id_bar
+    c.drawCentredString(ax + (aw / 2), y_id, dados["id_fedex_data"])
 
-    c.setFont("Helvetica", fonte_codigo)
-    c.drawCentredString(area_x + (area_largura / 2), codigo_y, codigo)
+    c.setFont("Helvetica", code_f)
+    c.drawCentredString(ax + (aw / 2), y_code, code)
+
+
+def _desenhar_etiqueta_rede_pdf(
+    c,
+    x,
+    y,
+    largura_pt,
+    altura_pt,
+    dados,
+    espacamento_extra,
+    escala_fonte_usuario,
+    ajuste_cabecalho=0.0,
+    ajuste_rodape=0.0,
+):
+    ref_w = 90 * MM_TO_POINTS
+    ref_h = 100 * MM_TO_POINTS
+    scale = min(largura_pt / ref_w, altura_pt / ref_h)
+
+    border = _clamp(0.9 * scale, 0.6, 1.4)
+    c.setLineWidth(border)
+    c.rect(x, y, largura_pt, altura_pt)
+
+    pad = max(3.0 * MM_TO_POINTS, 5.0 * MM_TO_POINTS * scale)
+    ax, ay = x + pad, y + pad
+    aw, ah = largura_pt - (2 * pad), altura_pt - (2 * pad)
+
+    title_f = _clamp(10.5 * scale * escala_fonte_usuario, 7, 36)
+    label_f = _clamp(8.4 * scale * escala_fonte_usuario, 6, 28)
+    value_f = _clamp(8.8 * scale * escala_fonte_usuario, 6, 28)
+    gap = max(2.0, 1.7 * MM_TO_POINTS * scale) + (espacamento_extra * 1.35)
+
+    y_top = ay + ah
+    y_title = y_top - title_f
+    c.setFont("Helvetica-Bold", title_f)
+    c.drawString(ax, y_title, "OPERACAO REVERSA")
+    c.setFont("Helvetica-Bold", label_f)
+    c.drawRightString(ax + aw, y_title, f"Tecnologia: {dados['tecnologia']}")
+
+    y_div = y_title - (gap * 0.8)
+    c.setLineWidth(max(0.4, border * 0.7))
+    c.line(ax, y_div, ax + aw, y_div)
+
+    fields = [
+        ("Origem", dados["origem"]),
+        ("Destino", dados["destino"]),
+        ("Numero CRED", dados["numero_cred"]),
+        ("Nota Fiscal", dados["nota_fiscal"]),
+        ("Data Emissao", dados["data_emissao"]),
+        ("OS", dados["os"]),
+        ("Volume", "-"),
+    ]
+
+    c.setFont("Helvetica-Bold", label_f)
+    label_w = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_f) for k, _ in fields)
+    value_x = ax + label_w + max(5, 2.0 * MM_TO_POINTS * scale)
+
+    header_gap = max(gap * 1.1, label_f * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
+    y_text = y_div - header_gap
+    step = max(label_f, value_f) + gap
+    for k, v in fields:
+        c.setFont("Helvetica-Bold", label_f)
+        c.drawString(ax, y_text, f"{k}:")
+        c.setFont("Helvetica", value_f)
+        c.drawString(value_x, y_text, str(v))
+        y_text -= step
+
+    rodape_margem = max(gap * 1.1, label_f) + (espacamento_extra * 0.45)
+    rodape_texto_y = max(ay + rodape_margem, y_text + (gap * 0.2)) + ajuste_rodape
+    rodape_linha_gap = max(label_f * 1.2, gap * 1.15)
+    rodape_linha_y = rodape_texto_y + rodape_linha_gap
+    c.line(ax, rodape_linha_y, ax + aw, rodape_linha_y)
+    c.setFont("Helvetica-Bold", label_f)
+    c.drawString(ax, rodape_texto_y, f"Ordem Servico: {dados['os']}")
+    c.drawRightString(ax + aw, rodape_texto_y, f"Nota Fiscal: {dados['nota_fiscal']}")
 
 
 def _gerar_pdf_bytes(
@@ -291,115 +496,192 @@ def _gerar_pdf_bytes(
     altura_mm: float,
     espacamento_extra: float,
     escala_fonte_usuario: float,
+    ajuste_cabecalho: float = 0.0,
+    ajuste_rodape: float = 0.0,
 ) -> bytes:
     if not REPORTLAB_AVAILABLE:
         raise RuntimeError("Biblioteca reportlab nao encontrada.")
 
     largura_pt = largura_mm * MM_TO_POINTS
     altura_pt = altura_mm * MM_TO_POINTS
-
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    c.setTitle(APP_NAME)
-
     layout = _layout_paginas_a4(largura_pt, altura_pt)
     if not layout:
-        raise ValueError(
-            "Com esse tamanho de etiqueta nao cabe nenhuma unidade na folha A4. "
-            "Reduza largura/altura."
-        )
+        raise ValueError("Com esse tamanho de etiqueta nao cabe nenhuma unidade na folha A4.")
 
-    for indice, etiqueta in enumerate(dados_lote["etiquetas"]):
-        indice_slot = indice % layout["por_pagina"]
-        if indice > 0 and indice_slot == 0:
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setTitle(APP_NAME)
+
+    for i, etiqueta in enumerate(dados_lote["etiquetas"]):
+        slot = i % layout["por_pagina"]
+        if i > 0 and slot == 0:
             c.showPage()
+        x, y = layout["positions"][slot]
 
-        x, y = layout["posicoes"][indice_slot]
-        _desenhar_etiqueta_pdf(
-            c,
-            x,
-            y,
-            largura_pt,
-            altura_pt,
-            etiqueta,
-            espacamento_extra,
-            escala_fonte_usuario,
-        )
+        if etiqueta["mode"] == "REDE":
+            _desenhar_etiqueta_rede_pdf(
+                c,
+                x,
+                y,
+                largura_pt,
+                altura_pt,
+                etiqueta,
+                espacamento_extra,
+                escala_fonte_usuario,
+                ajuste_cabecalho,
+                ajuste_rodape,
+            )
+        else:
+            _desenhar_etiqueta_padrao_pdf(
+                c,
+                x,
+                y,
+                largura_pt,
+                altura_pt,
+                etiqueta,
+                espacamento_extra,
+                escala_fonte_usuario,
+                ajuste_cabecalho,
+                ajuste_rodape,
+            )
 
     c.showPage()
-
     c.save()
-    return buffer.getvalue()
+    return buf.getvalue()
 
 
-def _inicializar_estado() -> None:
+def _init_state() -> None:
     if "resultado" not in st.session_state:
         st.session_state["resultado"] = None
     if "pdf_bytes" not in st.session_state:
         st.session_state["pdf_bytes"] = None
     if "erros" not in st.session_state:
         st.session_state["erros"] = []
+    if "origem_rede_prev" not in st.session_state:
+        st.session_state["origem_rede_prev"] = ""
+    if "cred_code" not in st.session_state:
+        st.session_state["cred_code"] = ""
+    if "cfg_modo_prev" not in st.session_state:
+        st.session_state["cfg_modo_prev"] = ""
 
 
 def main() -> None:
     st.set_page_config(page_title=APP_NAME, layout="wide")
-    _inicializar_estado()
+    _init_state()
+
+    origens, origem_para_cred, aviso_planilha = _carregar_origens_e_cred()
 
     st.title(APP_NAME)
-    st.caption("Versao online para geração de etiquetas.")
+    if aviso_planilha:
+        st.warning(aviso_planilha)
 
-    with st.form("form_etiqueta", clear_on_submit=False):
-        col1, col2 = st.columns(2)
-        destino = col1.selectbox("Destino *", [""] + DESTINOS, index=0)
-        projeto = col2.selectbox("Projeto *", [""] + PROJETOS, index=0)
+    st.subheader("Origem / Destino / Projeto")
+    c1, c2, c3 = st.columns(3)
+    origem = c1.selectbox("Origem *", [""] + origens, index=0)
+    destino = c2.selectbox("Destino *", [""] + DESTINOS, index=0)
+    projeto = c3.selectbox("Projeto *", [""] + PROJETOS, index=0)
+    is_rede = projeto == PROJETO_REDE
+    modo_cfg = PROJETO_REDE if is_rede else "OUTROS"
+    cfg_padrao = DEFAULT_CONFIG_REDE if is_rede else DEFAULT_CONFIG_OUTROS
+    if st.session_state.get("cfg_modo_prev") != modo_cfg:
+        st.session_state["cfg_largura_mm"] = cfg_padrao["largura_mm"]
+        st.session_state["cfg_altura_mm"] = cfg_padrao["altura_mm"]
+        st.session_state["cfg_espacamento_pt"] = cfg_padrao["espacamento_pt"]
+        st.session_state["cfg_escala_fonte"] = cfg_padrao["escala_fonte"]
+        st.session_state["cfg_modo_prev"] = modo_cfg
+    else:
+        if "cfg_largura_mm" not in st.session_state:
+            st.session_state["cfg_largura_mm"] = cfg_padrao["largura_mm"]
+        if "cfg_altura_mm" not in st.session_state:
+            st.session_state["cfg_altura_mm"] = cfg_padrao["altura_mm"]
+        if "cfg_espacamento_pt" not in st.session_state:
+            st.session_state["cfg_espacamento_pt"] = cfg_padrao["espacamento_pt"]
+        if "cfg_escala_fonte" not in st.session_state:
+            st.session_state["cfg_escala_fonte"] = cfg_padrao["escala_fonte"]
 
-        prefixo_romaneio = PREFIXOS_ROMANEIO.get(projeto, "")
-        colr1, colr2 = st.columns([1, 2])
-        colr1.text_input("Prefixo Romaneio", value=prefixo_romaneio, disabled=True)
-        romaneio_sufixo = colr2.text_input(
-            "Romaneio (somente numeros apos /) *", max_chars=20
-        ).strip()
+    tecnologia = ""
+    nota_fiscal = ""
+    os_num = ""
+    numero_cred = ""
+    romaneio_sufixo = ""
+    nr_nf = ""
+    id_fedex = ""
+    volume_total = ""
 
-        coln1, coln2 = st.columns(2)
-        nr_nf = coln1.text_input("NR NF *", max_chars=20).strip()
-        id_fedex = coln2.text_input("ID FEDEX *", max_chars=20).strip()
+    if is_rede:
+        st.subheader("Projeto REDE")
+        cred_sugerido = ""
+        if origem and origem in origem_para_cred:
+            cred_sugerido = origem_para_cred[origem]
 
-        volume_total = st.text_input(
-            "Volume (qtd total de etiquetas) *", max_chars=3
-        ).strip()
+        if st.session_state["origem_rede_prev"] != origem:
+            st.session_state["origem_rede_prev"] = origem
+            st.session_state["cred_code"] = cred_sugerido if cred_sugerido in CRED_CODES else ""
 
-        st.markdown("**Configuracao da Etiqueta**")
-        colc1, colc2, colc3, colc4 = st.columns(4)
-        largura_mm = float(colc1.number_input("Largura (mm)", min_value=1.0, value=90.0))
-        altura_mm = float(colc2.number_input("Altura (mm)", min_value=1.0, value=100.0))
-        espacamento_linhas = float(
-            colc3.number_input("Espaçamento linhas (pt)", min_value=0.0, value=5.0)
-        )
-        escala_fonte = float(colc4.number_input("Escala de fonte", min_value=0.1, value=2.5))
+        r1, r2, r3 = st.columns(3)
+        tecnologia = r1.text_input("Tecnologia * (texto, max 3)", max_chars=3).strip()
+        nota_fiscal = r2.text_input("Nota Fiscal * (max 8)", max_chars=8).strip()
+        os_num = r3.text_input("OS * (max 10)", max_chars=10).strip()
+        r4, r5 = st.columns([1, 2])
+        r4.text_input("Data Emissao", value=datetime.now().strftime("%d/%m/%Y"), disabled=True)
+        numero_cred = r5.selectbox("Numero CRED *", [""] + CRED_CODES, key="cred_code")
+        if cred_sugerido:
+            st.caption(f"CRED sugerido pela Origem: {cred_sugerido}")
+    else:
+        st.subheader("Outros Projetos")
+        prefixo = PREFIXOS_ROMANEIO.get(projeto, "")
+        o1, o2 = st.columns([1, 2])
+        o1.text_input("Prefixo Romaneio", value=prefixo, disabled=True)
+        romaneio_sufixo = o2.text_input("Romaneio (numeros apos /) *", max_chars=20).strip()
+        o3, o4 = st.columns(2)
+        nr_nf = o3.text_input("NR NF *", max_chars=20).strip()
+        id_fedex = o4.text_input("ID FEDEX *", max_chars=20).strip()
+        volume_total = st.text_input("Volume (qtd total de etiquetas) *", max_chars=3).strip()
 
-        gerar = st.form_submit_button("Gerar etiqueta")
+    st.subheader("Configuracao da Etiqueta")
+    s1, s2, s3, s4 = st.columns(4)
+    largura_mm = float(s1.number_input("Largura (mm)", min_value=1.0, key="cfg_largura_mm"))
+    altura_mm = float(s2.number_input("Altura (mm)", min_value=1.0, key="cfg_altura_mm"))
+    espacamento = float(
+        s3.number_input("Espacamento linhas (pt)", min_value=0.0, key="cfg_espacamento_pt")
+    )
+    escala_fonte = float(
+        s4.number_input("Escala de fonte", min_value=0.1, key="cfg_escala_fonte")
+    )
+    s5, s6 = st.columns(2)
+    ajuste_cabecalho = float(
+        s5.number_input("Ajuste cabecalho (pt)", min_value=0.0, value=3.0, step=0.5)
+    )
+    ajuste_rodape = float(
+        s6.number_input("Ajuste rodape (pt)", min_value=0.0, value=3.0, step=0.5)
+    )
 
-    if gerar:
+    if st.button("Gerar etiqueta(s)", type="primary", use_container_width=True):
         entradas = {
+            "origem": origem,
             "destino": destino,
             "projeto": projeto,
-            "romaneio_sufixo": romaneio_sufixo,
-            "nr_nf": nr_nf,
-            "id_fedex": id_fedex,
-            "volume_total": volume_total,
+            "tecnologia": tecnologia,
+            "nota_fiscal": _apenas_numeros(nota_fiscal),
+            "os": _apenas_numeros(os_num),
+            "numero_cred": (numero_cred or "").strip().upper(),
+            "romaneio_sufixo": _apenas_numeros(romaneio_sufixo),
+            "nr_nf": _apenas_numeros(nr_nf),
+            "id_fedex": _apenas_numeros(id_fedex),
+            "volume_total": _apenas_numeros(volume_total),
             "largura_mm": largura_mm,
             "altura_mm": altura_mm,
-            "espacamento_linhas": espacamento_linhas,
+            "espacamento_linhas": espacamento,
             "escala_fonte": escala_fonte,
+            "ajuste_cabecalho": ajuste_cabecalho,
+            "ajuste_rodape": ajuste_rodape,
         }
 
         st.session_state["erros"] = _validar_entradas(entradas)
         st.session_state["resultado"] = None
         st.session_state["pdf_bytes"] = None
 
-        if st.session_state["erros"]:
-            pass
-        else:
+        if not st.session_state["erros"]:
             dados = _montar_dados(entradas)
             st.session_state["resultado"] = {"dados": dados, "config": entradas}
             if REPORTLAB_AVAILABLE:
@@ -408,11 +690,13 @@ def main() -> None:
                         dados,
                         largura_mm=largura_mm,
                         altura_mm=altura_mm,
-                        espacamento_extra=espacamento_linhas,
+                        espacamento_extra=espacamento,
                         escala_fonte_usuario=escala_fonte,
+                        ajuste_cabecalho=ajuste_cabecalho,
+                        ajuste_rodape=ajuste_rodape,
                     )
-                except Exception as erro:
-                    st.session_state["erros"].append(str(erro))
+                except Exception as exc:
+                    st.session_state["erros"].append(str(exc))
                     st.session_state["resultado"] = None
 
     if st.session_state["erros"]:
@@ -423,60 +707,63 @@ def main() -> None:
     if resultado:
         dados = resultado["dados"]
         etiquetas = dados["etiquetas"]
-        st.success(f"Etiquetas validadas e prontas para PDF. Quantidade: {len(etiquetas)}.")
+        st.success(f"Etiquetas validadas. Quantidade: {len(etiquetas)}")
 
-        largura_pt = resultado["config"]["largura_mm"] * MM_TO_POINTS
-        altura_pt = resultado["config"]["altura_mm"] * MM_TO_POINTS
-        layout = _layout_paginas_a4(largura_pt, altura_pt)
+        layout = _layout_paginas_a4(
+            resultado["config"]["largura_mm"] * MM_TO_POINTS,
+            resultado["config"]["altura_mm"] * MM_TO_POINTS,
+        )
         if layout:
             por_folha = layout["por_pagina"]
             folhas = (len(etiquetas) + por_folha - 1) // por_folha
-            st.info(
-                f"Etiquetas por folha A4: {por_folha} | Folhas estimadas: {folhas}"
-            )
+            st.info(f"Etiquetas por folha A4: {por_folha} | Folhas estimadas: {folhas}")
 
-        limite_preview = 120
-        linhas_preview = [
-            f"{item['volume']} -> {item['codigo_barras']}"
-            for item in etiquetas[:limite_preview]
-        ]
-        if len(etiquetas) > limite_preview:
-            linhas_preview.append(
-                f"... (mostrando {limite_preview} de {len(etiquetas)} etiquetas)"
+        st.markdown("**Preview**")
+        if dados["mode"] == "REDE":
+            e = etiquetas[0]
+            st.code(
+                (
+                    f"Titulo: {e['titulo']}\n"
+                    f"Tecnologia: {e['tecnologia']}\n"
+                    f"Origem: {e['origem']}\n"
+                    f"Destino: {e['destino']}\n"
+                    f"Numero CRED: {e['numero_cred']}\n"
+                    f"Nota Fiscal: {e['nota_fiscal']}\n"
+                    f"Data Emissao: {e['data_emissao']}\n"
+                    f"OS: {e['os']}\n"
+                    "Volume: -"
+                ),
+                language="text",
             )
-
-        st.markdown("**Preview dos dados**")
-        st.code(
-            (
-                f"Destino: {dados['destino']}\n"
-                f"Projeto: {dados['projeto']}\n"
-                f"Romaneio: {dados['romaneio']}\n"
-                f"NR NF: {dados['nr_nf']}\n"
-                f"ID FEDEX: {dados['id_fedex_data']}\n"
-                f"Quantidade de etiquetas: {len(etiquetas)}\n\n"
-                "Volumes / Codigos de barras:\n"
-                + "\n".join(linhas_preview)
-            ),
-            language="text",
-        )
+        else:
+            preview = [f"{e['volume']} -> {e['codigo_barras']}" for e in etiquetas[:120]]
+            if len(etiquetas) > 120:
+                preview.append(f"... (mostrando 120 de {len(etiquetas)} etiquetas)")
+            st.code(
+                (
+                    f"Origem: {dados['origem']}\n"
+                    f"Destino: {dados['destino']}\n"
+                    f"Projeto: {dados['projeto']}\n"
+                    f"Romaneio: {dados['romaneio']}\n"
+                    f"NR NF: {dados['nr_nf']}\n"
+                    f"ID FEDEX: {dados['id_fedex_data']}\n"
+                    f"Quantidade de etiquetas: {len(etiquetas)}\n\n"
+                    "Volumes / Codigos de barras:\n"
+                    + "\n".join(preview)
+                ),
+                language="text",
+            )
 
         if not REPORTLAB_AVAILABLE:
-            st.warning("Instale o reportlab para gerar PDF: pip install reportlab")
-        else:
-            nome_arquivo = f"etiqueta_{datetime.now():%Y%m%d_%H%M%S}.pdf"
+            st.warning("Instale reportlab para gerar PDF: pip install reportlab")
+        elif st.session_state["pdf_bytes"]:
             st.download_button(
-                "Baixar etiqueta em PDF",
+                "Baixar etiqueta(s) em PDF",
                 data=st.session_state["pdf_bytes"],
-                file_name=nome_arquivo,
+                file_name=f"etiqueta_{datetime.now():%Y%m%d_%H%M%S}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
-
-    st.markdown("---")
-    st.caption(
-        ""
-        ""
-    )
 
 
 if __name__ == "__main__":
