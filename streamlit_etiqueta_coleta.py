@@ -190,11 +190,12 @@ def _validar_entradas(entradas: dict) -> list[str]:
         err_id = _erro_numero_obrigatorio("ID FEDEX", entradas.get("id_fedex", ""))
         if err_id:
             erros.append(err_id)
-        err_vol = _erro_numero_obrigatorio("Volume", entradas.get("volume_total", ""), 3)
-        if err_vol:
-            erros.append(err_vol)
-        elif int(entradas["volume_total"]) <= 0:
-            erros.append("O campo 'Volume' deve ser maior que zero.")
+
+    err_vol = _erro_numero_obrigatorio("Volume", entradas.get("volume_total", ""), 3)
+    if err_vol:
+        erros.append(err_vol)
+    elif int(entradas["volume_total"]) <= 0:
+        erros.append("O campo 'Volume' deve ser maior que zero.")
 
     if entradas["largura_mm"] <= 0 or entradas["altura_mm"] <= 0:
         erros.append("Largura e altura da etiqueta devem ser maiores que zero.")
@@ -250,24 +251,32 @@ def _montar_dados_padrao(entradas: dict) -> dict:
 
 def _montar_dados_rede(entradas: dict) -> dict:
     data_emissao = datetime.now().strftime("%d/%m/%Y")
-    etiqueta = {
-        "mode": "REDE",
-        "titulo": "OPERACAO REVERSA",
-        "tecnologia": entradas["tecnologia"].strip().upper(),
-        "origem": entradas["origem"],
-        "destino": entradas["destino"],
-        "numero_cred": entradas["numero_cred"],
-        "nota_fiscal": entradas["nota_fiscal"],
-        "data_emissao": data_emissao,
-        "os": entradas["os"],
-        "volume": "-",
-    }
+    total = int(entradas["volume_total"])
+    total_fmt = str(total).zfill(3)
+    etiquetas = []
+    for i in range(1, total + 1):
+        atual_fmt = str(i).zfill(3)
+        etiquetas.append(
+            {
+                "mode": "REDE",
+                "titulo": "OPERACAO REVERSA",
+                "tecnologia": entradas["tecnologia"].strip().upper(),
+                "origem": entradas["origem"],
+                "destino": entradas["destino"],
+                "numero_cred": entradas["numero_cred"],
+                "nota_fiscal": entradas["nota_fiscal"],
+                "data_emissao": data_emissao,
+                "os": entradas["os"],
+                "volume": f"{atual_fmt}/{total_fmt}",
+            }
+        )
     return {
         "mode": "REDE",
         "origem": entradas["origem"],
         "destino": entradas["destino"],
         "projeto": entradas["projeto"],
-        "etiquetas": [etiqueta],
+        "volume_total": total,
+        "etiquetas": etiquetas,
     }
 
 
@@ -463,7 +472,7 @@ def _desenhar_etiqueta_rede_pdf(
         ("Nota Fiscal", dados["nota_fiscal"]),
         ("Data Emissao", dados["data_emissao"]),
         ("OS", dados["os"]),
-        ("Volume", "-"),
+        ("Volume", dados["volume"]),
     ]
 
     c.setFont("Helvetica-Bold", label_f)
@@ -622,9 +631,10 @@ def main() -> None:
         tecnologia = r1.text_input("Tecnologia * (texto, max 3)", max_chars=3).strip()
         nota_fiscal = r2.text_input("Nota Fiscal * (max 8)", max_chars=8).strip()
         os_num = r3.text_input("OS * (max 10)", max_chars=10).strip()
-        r4, r5 = st.columns([1, 2])
+        r4, r5, r6 = st.columns([1, 2, 1])
         r4.text_input("Data Emissao", value=datetime.now().strftime("%d/%m/%Y"), disabled=True)
         numero_cred = r5.selectbox("Numero CRED *", [""] + CRED_CODES, key="cred_code")
+        volume_total = r6.text_input("Volume *", max_chars=3).strip()
         if cred_sugerido:
             st.caption(f"CRED sugerido pela Origem: {cred_sugerido}")
     else:
@@ -721,6 +731,9 @@ def main() -> None:
         st.markdown("**Preview**")
         if dados["mode"] == "REDE":
             e = etiquetas[0]
+            volumes_preview = [item["volume"] for item in etiquetas[:40]]
+            if len(etiquetas) > 40:
+                volumes_preview.append(f"... (mostrando 40 de {len(etiquetas)} etiquetas)")
             st.code(
                 (
                     f"Titulo: {e['titulo']}\n"
@@ -731,7 +744,9 @@ def main() -> None:
                     f"Nota Fiscal: {e['nota_fiscal']}\n"
                     f"Data Emissao: {e['data_emissao']}\n"
                     f"OS: {e['os']}\n"
-                    "Volume: -"
+                    f"Quantidade de etiquetas: {len(etiquetas)}\n"
+                    "Volumes:\n"
+                    + "\n".join(volumes_preview)
                 ),
                 language="text",
             )

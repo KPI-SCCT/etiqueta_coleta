@@ -320,13 +320,18 @@ class EtiquetaColetaApp:
             width=14,
         ).grid(row=1, column=2, sticky="w", padx=(0, 8))
 
-        ttk.Label(self.frame_rede, text="Data Emissao:").grid(row=0, column=3, sticky="w", pady=(2, 0))
-        self.rede_data_emissao_entry = ttk.Entry(self.frame_rede, state="readonly", width=14)
-        self.rede_data_emissao_entry.grid(row=1, column=3, sticky="w")
+        ttk.Label(self.frame_rede, text="Volume (qtd total):").grid(row=0, column=3, sticky="w", pady=(2, 0))
+        ttk.Entry(
+            self.frame_rede,
+            textvariable=self.volume_qtd_var,
+            validate="key",
+            validatecommand=self.vcmd_volume,
+            width=14,
+        ).grid(row=1, column=3, sticky="w")
 
         ttk.Label(self.frame_rede, text="Numero CRED:").grid(row=2, column=0, sticky="w", pady=(10, 0))
         cred_frame = ttk.Frame(self.frame_rede)
-        cred_frame.grid(row=3, column=0, columnspan=4, sticky="nsew")
+        cred_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=(0, 8))
         cred_frame.columnconfigure(0, weight=1)
         self.lb_cred = tk.Listbox(cred_frame, height=6, exportselection=False)
         self.lb_cred.grid(row=0, column=0, sticky="ew")
@@ -337,6 +342,10 @@ class EtiquetaColetaApp:
             self.lb_cred.insert(tk.END, cred_code)
         if CRED_CODES:
             self.lb_cred.selection_set(0)
+
+        ttk.Label(self.frame_rede, text="Data Emissao:").grid(row=2, column=3, sticky="w", pady=(10, 0))
+        self.rede_data_emissao_entry = ttk.Entry(self.frame_rede, state="readonly", width=14)
+        self.rede_data_emissao_entry.grid(row=3, column=3, sticky="w")
 
         ttk.Label(frame, text="Sessao 3 - Configuracao da Etiqueta", font=("Segoe UI", 10, "bold")).grid(
             row=6, column=0, columnspan=4, sticky="w", pady=(12, 4)
@@ -561,6 +570,7 @@ class EtiquetaColetaApp:
             tecnologia = self.tecnologia_var.get().strip().upper()
             nota_fiscal = self.nota_fiscal_var.get().strip()
             os_num = self.os_var.get().strip()
+            volume_qtd = self.volume_qtd_var.get().strip()
             cred_label = self._valor_listbox(self.lb_cred, "Numero CRED")
             if not cred_label:
                 return None
@@ -586,26 +596,49 @@ class EtiquetaColetaApp:
             if not os_num.isdigit() or len(os_num) > 10:
                 messagebox.showerror("Campo invalido", "OS aceita somente numeros (max 10).")
                 return None
+            if not volume_qtd:
+                messagebox.showerror(
+                    "Campo obrigatorio", "Informe o campo Volume (qtd total)."
+                )
+                return None
+            if not volume_qtd.isdigit():
+                messagebox.showerror("Campo invalido", "Volume aceita apenas numeros.")
+                return None
+            if len(volume_qtd) > 3:
+                messagebox.showerror("Campo invalido", "Volume permite no maximo 3 digitos.")
+                return None
 
-            etiqueta = {
-                "mode": "REDE",
-                "titulo": "OPERACAO REVERSA",
-                "tecnologia": tecnologia,
-                "origem": origem,
-                "destino": destino,
-                "projeto": projeto,
-                "numero_cred_label": cred_label,
-                "nota_fiscal": nota_fiscal,
-                "data_emissao": data_emissao,
-                "os": os_num,
-                "volume": "-",
-            }
+            total_volumes = int(volume_qtd)
+            if total_volumes <= 0:
+                messagebox.showerror("Campo invalido", "O campo Volume deve ser maior que zero.")
+                return None
+
+            vol_total_fmt = str(total_volumes).zfill(3)
+            etiquetas = []
+            for indice in range(1, total_volumes + 1):
+                vol_atual_fmt = str(indice).zfill(3)
+                etiquetas.append(
+                    {
+                        "mode": "REDE",
+                        "titulo": "OPERACAO REVERSA",
+                        "tecnologia": tecnologia,
+                        "origem": origem,
+                        "destino": destino,
+                        "projeto": projeto,
+                        "numero_cred_label": cred_label,
+                        "nota_fiscal": nota_fiscal,
+                        "data_emissao": data_emissao,
+                        "os": os_num,
+                        "volume": f"{vol_atual_fmt}/{vol_total_fmt}",
+                    }
+                )
             return {
                 "mode": "REDE",
                 "origem": origem,
                 "destino": destino,
                 "projeto": projeto,
-                "etiquetas": [etiqueta],
+                "volume_total": total_volumes,
+                "etiquetas": etiquetas,
             }
 
         sufixo_romaneio = self.romaneio_sufixo_var.get().strip()
@@ -688,6 +721,12 @@ class EtiquetaColetaApp:
         total = len(etiquetas)
         if dados["mode"] == "REDE":
             e = etiquetas[0]
+            limite_preview = 40
+            volumes_preview = [item["volume"] for item in etiquetas[:limite_preview]]
+            if total > limite_preview:
+                volumes_preview.append(
+                    f"... (mostrando {limite_preview} de {total} etiquetas)"
+                )
             texto = (
                 f"Titulo: {e['titulo']}\n"
                 f"Tecnologia: {e['tecnologia']}\n"
@@ -697,8 +736,9 @@ class EtiquetaColetaApp:
                 f"Nota Fiscal: {e['nota_fiscal']}\n"
                 f"Data Emissao: {e['data_emissao']}\n"
                 f"OS: {e['os']}\n"
-                "Volume: -\n"
-                f"Quantidade de etiquetas: {total}"
+                f"Quantidade de etiquetas: {total}\n"
+                "Volumes:\n"
+                + "\n".join(volumes_preview)
             )
         else:
             limite_preview = 80
@@ -1013,7 +1053,7 @@ class EtiquetaColetaApp:
             ("Nota Fiscal", dados["nota_fiscal"]),
             ("Data Emissao", dados["data_emissao"]),
             ("OS", dados["os"]),
-            ("Volume", "-"),
+            ("Volume", dados["volume"]),
         ]
 
         c.setFont("Helvetica-Bold", label_font)
