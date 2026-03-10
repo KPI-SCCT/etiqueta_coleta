@@ -354,11 +354,14 @@ def _desenhar_etiqueta_padrao_pdf(
         ("VOLUME", dados["volume"]),
     ]
 
-    title_f = _clamp(12 * scale * escala_fonte_usuario, 8, 42)
-    label_f = _clamp(9.2 * scale * escala_fonte_usuario, 6, 30)
-    value_f = _clamp(9.8 * scale * escala_fonte_usuario, 6, 32)
-    code_f = _clamp(8.2 * scale * escala_fonte_usuario, 6, 24)
-    id_f = _clamp(7.0 * scale * escala_fonte_usuario, 5.5, 18)
+    escala_conteudo = _clamp(escala_fonte_usuario, 0.6, 4.0)
+    # Suaviza o impacto da escala geral no titulo para evitar desproporcao.
+    escala_titulo = 1.0 + ((escala_conteudo - 1.0) * 0.35)
+    title_f = _clamp(12 * scale * escala_titulo, 8, 34)
+    label_f = _clamp(9.2 * scale * escala_conteudo, 6, 30)
+    value_f = _clamp(9.8 * scale * escala_conteudo, 6, 32)
+    code_f = _clamp(8.2 * scale * escala_conteudo, 6, 24)
+    id_f = _clamp(7.0 * scale * escala_conteudo, 5.5, 18)
     gap = max(2.2, 1.8 * MM_TO_POINTS * scale) + (espacamento_extra * 1.35)
     block_gap = max(4.0, 3 * MM_TO_POINTS * scale)
 
@@ -385,11 +388,13 @@ def _desenhar_etiqueta_padrao_pdf(
 
     step = max(label_f, value_f) + gap
     needed = (len(lines) * max(label_f, value_f)) + ((len(lines) - 1) * gap)
-    if needed > available and available > 0:
-        factor = available / needed
-        label_f *= factor
-        value_f *= factor
-        step = max(label_f, value_f) + (gap * factor)
+    if available > 0 and needed > 0:
+        factor_auto = _clamp(available / needed, 0.65, 1.55)
+        if abs(factor_auto - 1.0) > 0.03:
+            label_f *= factor_auto
+            value_f *= factor_auto
+            gap *= factor_auto
+    step = max(label_f, value_f) + gap
 
     c.setFont("Helvetica-Bold", label_f)
     label_w = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_f) for k, _ in lines)
@@ -456,11 +461,14 @@ def _desenhar_etiqueta_rede_pdf(
     ax, ay = x + pad, y + pad
     aw, ah = largura_pt - (2 * pad), altura_pt - (2 * pad)
 
-    title_f = _clamp(10.5 * scale * escala_fonte_usuario, 7, 36)
-    label_f = _clamp(8.4 * scale * escala_fonte_usuario, 6, 28)
-    value_f = _clamp(8.8 * scale * escala_fonte_usuario, 6, 28)
-    code_f = _clamp(7.8 * scale * escala_fonte_usuario, 5.5, 14)
-    id_f = _clamp(7.0 * scale * escala_fonte_usuario, 5.0, 12)
+    escala_conteudo = _clamp(escala_fonte_usuario, 0.6, 4.0)
+    # Suaviza o impacto da escala geral no titulo para evitar desproporcao.
+    escala_titulo = 1.0 + ((escala_conteudo - 1.0) * 0.35)
+    title_f = _clamp(10.5 * scale * escala_titulo, 7, 28)
+    label_f = _clamp(8.4 * scale * escala_conteudo, 6, 28)
+    value_f = _clamp(8.8 * scale * escala_conteudo, 6, 28)
+    code_f = _clamp(7.8 * scale * escala_conteudo, 5.5, 14)
+    id_f = _clamp(7.0 * scale * escala_conteudo, 5.0, 12)
     gap = max(2.0, 1.7 * MM_TO_POINTS * scale) + (espacamento_extra * 1.35)
     h_code = code_f * 1.35
     h_id = id_f * 1.35
@@ -499,9 +507,9 @@ def _desenhar_etiqueta_rede_pdf(
     base_rodape = ay + barcode_block_h + gap_bar_block + rodape_section_h + ajuste_rodape
     altura_disponivel = topo_texto - base_rodape
     altura_necessaria = (len(fields) * max(label_f, value_f)) + ((len(fields) - 1) * gap)
-    if altura_necessaria > altura_disponivel and altura_disponivel > 0:
-        fator = max(0.55, altura_disponivel / altura_necessaria)
-        if fator < 1:
+    if altura_disponivel > 0 and altura_necessaria > 0:
+        fator = _clamp(altura_disponivel / altura_necessaria, 0.6, 1.45)
+        if abs(fator - 1.0) > 0.03:
             label_f *= fator
             value_f *= fator
             gap *= fator

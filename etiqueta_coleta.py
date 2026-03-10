@@ -942,12 +942,15 @@ class EtiquetaColetaApp:
             ("VOLUME", dados["volume"]),
         ]
 
-        fonte_titulo = self._clamp(12 * escala_etiqueta * escala_fonte_usuario, 8, 42)
-        fonte_label = self._clamp(9.2 * escala_etiqueta * escala_fonte_usuario, 6, 30)
-        fonte_valor = self._clamp(9.8 * escala_etiqueta * escala_fonte_usuario, 6, 32)
-        fonte_codigo = self._clamp(8.2 * escala_etiqueta * escala_fonte_usuario, 6, 24)
+        escala_conteudo = self._clamp(escala_fonte_usuario, 0.6, 4.0)
+        # Suaviza o impacto da escala geral no titulo para evitar desproporcao.
+        escala_titulo = 1.0 + ((escala_conteudo - 1.0) * 0.35)
+        fonte_titulo = self._clamp(12 * escala_etiqueta * escala_titulo, 8, 34)
+        fonte_label = self._clamp(9.2 * escala_etiqueta * escala_conteudo, 6, 30)
+        fonte_valor = self._clamp(9.8 * escala_etiqueta * escala_conteudo, 6, 32)
+        fonte_codigo = self._clamp(8.2 * escala_etiqueta * escala_conteudo, 6, 24)
         fonte_identificador = self._clamp(
-            7.0 * escala_etiqueta * escala_fonte_usuario, 5.5, 18
+            7.0 * escala_etiqueta * escala_conteudo, 5.5, 18
         )
         gap_linha = max(2.2, 1.8 * MM_TO_POINTS * escala_etiqueta) + (espacamento_extra * 1.35)
         gap_bloco = max(4.0, 3 * MM_TO_POINTS * escala_etiqueta)
@@ -985,11 +988,13 @@ class EtiquetaColetaApp:
         altura_necessaria = (len(linhas) * max(fonte_label, fonte_valor)) + (
             (len(linhas) - 1) * gap_linha
         )
-        if altura_necessaria > altura_disponivel_detalhes and altura_disponivel_detalhes > 0:
-            fator = altura_disponivel_detalhes / altura_necessaria
-            fonte_label *= fator
-            fonte_valor *= fator
-            passo_linha = max(fonte_label, fonte_valor) + (gap_linha * fator)
+        if altura_disponivel_detalhes > 0 and altura_necessaria > 0:
+            fator_auto = self._clamp(altura_disponivel_detalhes / altura_necessaria, 0.65, 1.55)
+            if abs(fator_auto - 1.0) > 0.03:
+                fonte_label *= fator_auto
+                fonte_valor *= fator_auto
+                gap_linha *= fator_auto
+        passo_linha = max(fonte_label, fonte_valor) + gap_linha
 
         c.setFont("Helvetica-Bold", fonte_label)
         largura_labels = max(
@@ -1063,11 +1068,14 @@ class EtiquetaColetaApp:
         area_largura = largura_pt - (2 * pad)
         area_altura = altura_pt - (2 * pad)
 
-        titulo_font = self._clamp(10.5 * escala * escala_fonte_usuario, 7, 36)
-        label_font = self._clamp(8.4 * escala * escala_fonte_usuario, 6, 28)
-        valor_font = self._clamp(8.8 * escala * escala_fonte_usuario, 6, 28)
-        fonte_codigo = self._clamp(7.8 * escala * escala_fonte_usuario, 5.5, 14)
-        fonte_identificador = self._clamp(7.0 * escala * escala_fonte_usuario, 5.0, 12)
+        escala_conteudo = self._clamp(escala_fonte_usuario, 0.6, 4.0)
+        # Suaviza o impacto da escala geral no titulo para evitar desproporcao.
+        escala_titulo = 1.0 + ((escala_conteudo - 1.0) * 0.35)
+        titulo_font = self._clamp(10.5 * escala * escala_titulo, 7, 28)
+        label_font = self._clamp(8.4 * escala * escala_conteudo, 6, 28)
+        valor_font = self._clamp(8.8 * escala * escala_conteudo, 6, 28)
+        fonte_codigo = self._clamp(7.8 * escala * escala_conteudo, 5.5, 14)
+        fonte_identificador = self._clamp(7.0 * escala * escala_conteudo, 5.0, 12)
         gap = max(2.0, 1.7 * MM_TO_POINTS * escala) + (espacamento_extra * 1.35)
         altura_codigo = fonte_codigo * 1.35
         altura_identificador = fonte_identificador * 1.35
@@ -1114,9 +1122,9 @@ class EtiquetaColetaApp:
         altura_necessaria = (len(campos) * max(label_font, valor_font)) + (
             (len(campos) - 1) * gap
         )
-        if altura_necessaria > altura_disponivel and altura_disponivel > 0:
-            fator = max(0.55, altura_disponivel / altura_necessaria)
-            if fator < 1:
+        if altura_disponivel > 0 and altura_necessaria > 0:
+            fator = self._clamp(altura_disponivel / altura_necessaria, 0.6, 1.45)
+            if abs(fator - 1.0) > 0.03:
                 label_font *= fator
                 valor_font *= fator
                 gap *= fator
