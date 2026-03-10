@@ -1056,11 +1056,29 @@ class EtiquetaColetaApp:
             ("Volume", dados["volume"]),
         ]
 
+        header_gap = max(gap * 1.1, label_font * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
+        rodape_margem = max(gap * 1.1, label_font) + (espacamento_extra * 0.45)
+        topo_texto = y_linha - header_gap
+        base_rodape = area_y + rodape_margem + ajuste_rodape
+        altura_disponivel = topo_texto - base_rodape
+        altura_necessaria = (len(campos) * max(label_font, valor_font)) + (
+            (len(campos) - 1) * gap
+        )
+        if altura_necessaria > altura_disponivel and altura_disponivel > 0:
+            fator = max(0.55, altura_disponivel / altura_necessaria)
+            if fator < 1:
+                label_font *= fator
+                valor_font *= fator
+                gap *= fator
+                header_gap = max(gap * 1.1, label_font * 1.1) + ajuste_cabecalho + (
+                    espacamento_extra * 0.65
+                )
+                rodape_margem = max(gap * 1.1, label_font) + (espacamento_extra * 0.45)
+
         c.setFont("Helvetica-Bold", label_font)
         maior_label = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_font) for k, _ in campos)
         valor_x = area_x + maior_label + max(5, 2.0 * MM_TO_POINTS * escala)
 
-        header_gap = max(gap * 1.1, label_font * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
         y_texto = y_linha - header_gap
         passo = max(label_font, valor_font) + gap
         for nome, valor in campos:
@@ -1070,8 +1088,12 @@ class EtiquetaColetaApp:
             c.drawString(valor_x, y_texto, str(valor))
             y_texto -= passo
 
-        rodape_margem = max(gap * 1.1, label_font) + (espacamento_extra * 0.45)
-        rodape_texto_y = max(area_y + rodape_margem, y_texto + (gap * 0.2)) + ajuste_rodape
+        # Usa o mesmo ajuste de "Espacamento (pt)" para a folga entre Volume e rodape.
+        folga_volume_rodape = max(0.0, espacamento_extra)
+        rodape_texto_y = max(
+            area_y + rodape_margem,
+            y_texto + (gap * 0.2) - folga_volume_rodape,
+        ) + ajuste_rodape
         rodape_linha_gap = max(label_font * 1.2, gap * 1.15)
         rodape_linha_y = rodape_texto_y + rodape_linha_gap
         c.line(area_x, rodape_linha_y, area_x + area_largura, rodape_linha_y)

@@ -475,11 +475,25 @@ def _desenhar_etiqueta_rede_pdf(
         ("Volume", dados["volume"]),
     ]
 
+    header_gap = max(gap * 1.1, label_f * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
+    rodape_margem = max(gap * 1.1, label_f) + (espacamento_extra * 0.45)
+    topo_texto = y_div - header_gap
+    base_rodape = ay + rodape_margem + ajuste_rodape
+    altura_disponivel = topo_texto - base_rodape
+    altura_necessaria = (len(fields) * max(label_f, value_f)) + ((len(fields) - 1) * gap)
+    if altura_necessaria > altura_disponivel and altura_disponivel > 0:
+        fator = max(0.55, altura_disponivel / altura_necessaria)
+        if fator < 1:
+            label_f *= fator
+            value_f *= fator
+            gap *= fator
+            header_gap = max(gap * 1.1, label_f * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
+            rodape_margem = max(gap * 1.1, label_f) + (espacamento_extra * 0.45)
+
     c.setFont("Helvetica-Bold", label_f)
     label_w = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_f) for k, _ in fields)
     value_x = ax + label_w + max(5, 2.0 * MM_TO_POINTS * scale)
 
-    header_gap = max(gap * 1.1, label_f * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
     y_text = y_div - header_gap
     step = max(label_f, value_f) + gap
     for k, v in fields:
@@ -489,8 +503,12 @@ def _desenhar_etiqueta_rede_pdf(
         c.drawString(value_x, y_text, str(v))
         y_text -= step
 
-    rodape_margem = max(gap * 1.1, label_f) + (espacamento_extra * 0.45)
-    rodape_texto_y = max(ay + rodape_margem, y_text + (gap * 0.2)) + ajuste_rodape
+    # Usa o mesmo ajuste de "Espacamento linhas (pt)" para a folga entre Volume e rodape.
+    folga_volume_rodape = max(0.0, espacamento_extra)
+    rodape_texto_y = max(
+        ay + rodape_margem,
+        y_text + (gap * 0.2) - folga_volume_rodape,
+    ) + ajuste_rodape
     rodape_linha_gap = max(label_f * 1.2, gap * 1.15)
     rodape_linha_y = rodape_texto_y + rodape_linha_gap
     c.line(ax, rodape_linha_y, ax + aw, rodape_linha_y)
