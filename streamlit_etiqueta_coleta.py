@@ -178,6 +178,9 @@ def _validar_entradas(entradas: dict) -> list[str]:
         err_os = _erro_numero_obrigatorio("OS", entradas.get("os", ""), 10)
         if err_os:
             erros.append(err_os)
+        err_id = _erro_numero_obrigatorio("ID FEDEX", entradas.get("id_fedex", ""), 10)
+        if err_id:
+            erros.append(err_id)
         if not entradas.get("numero_cred"):
             erros.append("O campo 'Numero CRED' e obrigatorio.")
     else:
@@ -187,7 +190,7 @@ def _validar_entradas(entradas: dict) -> list[str]:
         err_nf = _erro_numero_obrigatorio("NR NF", entradas.get("nr_nf", ""))
         if err_nf:
             erros.append(err_nf)
-        err_id = _erro_numero_obrigatorio("ID FEDEX", entradas.get("id_fedex", ""))
+        err_id = _erro_numero_obrigatorio("ID FEDEX", entradas.get("id_fedex", ""), 10)
         if err_id:
             erros.append(err_id)
 
@@ -253,9 +256,11 @@ def _montar_dados_rede(entradas: dict) -> dict:
     data_emissao = datetime.now().strftime("%d/%m/%Y")
     total = int(entradas["volume_total"])
     total_fmt = str(total).zfill(3)
+    id_fedex = entradas["id_fedex"]
     etiquetas = []
     for i in range(1, total + 1):
         atual_fmt = str(i).zfill(3)
+        volume_num = f"{atual_fmt}{total_fmt}"
         etiquetas.append(
             {
                 "mode": "REDE",
@@ -267,7 +272,9 @@ def _montar_dados_rede(entradas: dict) -> dict:
                 "nota_fiscal": entradas["nota_fiscal"],
                 "data_emissao": data_emissao,
                 "os": entradas["os"],
+                "id_fedex": id_fedex,
                 "volume": f"{atual_fmt}/{total_fmt}",
+                "codigo_barras": f"{entradas['nota_fiscal']}{entradas['os']}{volume_num}",
             }
         )
     return {
@@ -452,7 +459,16 @@ def _desenhar_etiqueta_rede_pdf(
     title_f = _clamp(10.5 * scale * escala_fonte_usuario, 7, 36)
     label_f = _clamp(8.4 * scale * escala_fonte_usuario, 6, 28)
     value_f = _clamp(8.8 * scale * escala_fonte_usuario, 6, 28)
+    code_f = _clamp(7.8 * scale * escala_fonte_usuario, 5.5, 14)
+    id_f = _clamp(7.0 * scale * escala_fonte_usuario, 5.0, 12)
     gap = max(2.0, 1.7 * MM_TO_POINTS * scale) + (espacamento_extra * 1.35)
+    h_code = code_f * 1.35
+    h_id = id_f * 1.35
+    h_bar = _clamp(ah * 0.13, 7 * MM_TO_POINTS, ah * 0.18)
+    gap_id_bar = max(1.8, 1.0 * MM_TO_POINTS * scale)
+    gap_bar_code = max(1.8, 0.95 * MM_TO_POINTS * scale)
+    barcode_block_h = h_code + gap_bar_code + h_bar + gap_id_bar + h_id
+    gap_bar_block = max(2.4, 1.8 * MM_TO_POINTS * scale)
 
     y_top = ay + ah
     y_title = y_top - title_f
@@ -477,8 +493,10 @@ def _desenhar_etiqueta_rede_pdf(
 
     header_gap = max(gap * 1.1, label_f * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
     rodape_margem = max(gap * 1.1, label_f) + (espacamento_extra * 0.45)
+    rodape_linha_gap = max(label_f * 1.2, gap * 1.15)
+    rodape_section_h = rodape_linha_gap + max(label_f, value_f) + max(1.5, gap * 0.25)
     topo_texto = y_div - header_gap
-    base_rodape = ay + rodape_margem + ajuste_rodape
+    base_rodape = ay + barcode_block_h + gap_bar_block + rodape_section_h + ajuste_rodape
     altura_disponivel = topo_texto - base_rodape
     altura_necessaria = (len(fields) * max(label_f, value_f)) + ((len(fields) - 1) * gap)
     if altura_necessaria > altura_disponivel and altura_disponivel > 0:
@@ -489,6 +507,7 @@ def _desenhar_etiqueta_rede_pdf(
             gap *= fator
             header_gap = max(gap * 1.1, label_f * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
             rodape_margem = max(gap * 1.1, label_f) + (espacamento_extra * 0.45)
+            rodape_linha_gap = max(label_f * 1.2, gap * 1.15)
 
     c.setFont("Helvetica-Bold", label_f)
     label_w = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_f) for k, _ in fields)
@@ -506,15 +525,42 @@ def _desenhar_etiqueta_rede_pdf(
     # Usa o mesmo ajuste de "Espacamento linhas (pt)" para a folga entre Volume e rodape.
     folga_volume_rodape = max(0.0, espacamento_extra)
     rodape_texto_y = max(
-        ay + rodape_margem,
+        ay + barcode_block_h + gap_bar_block + rodape_margem,
         y_text + (gap * 0.2) - folga_volume_rodape,
     ) + ajuste_rodape
-    rodape_linha_gap = max(label_f * 1.2, gap * 1.15)
     rodape_linha_y = rodape_texto_y + rodape_linha_gap
     c.line(ax, rodape_linha_y, ax + aw, rodape_linha_y)
     c.setFont("Helvetica-Bold", label_f)
     c.drawString(ax, rodape_texto_y, f"Ordem Servico: {dados['os']}")
     c.drawRightString(ax + aw, rodape_texto_y, f"Nota Fiscal: {dados['nota_fiscal']}")
+
+    codigo = dados["codigo_barras"]
+    target_w = aw * 0.78
+    modules = max(80, (11 * len(codigo)) + 35)
+    bar_w = _clamp(target_w / modules, 0.16, 1.6)
+    bar = code128.Code128(codigo, barHeight=h_bar, barWidth=bar_w)
+    for _ in range(20):
+        if bar.width > aw * 0.82 and bar_w > 0.14:
+            bar_w *= 0.95
+            bar = code128.Code128(codigo, barHeight=h_bar, barWidth=bar_w)
+            continue
+        if bar.width < aw * 0.72 and bar_w < 2.0:
+            bar_w *= 1.03
+            bar = code128.Code128(codigo, barHeight=h_bar, barWidth=bar_w)
+            continue
+        break
+
+    y_code = ay
+    y_bar = y_code + h_code + gap_bar_code
+    x_bar = ax + ((aw - bar.width) / 2)
+    bar.drawOn(c, x_bar, y_bar)
+
+    c.setFont("Helvetica", id_f)
+    y_id = y_bar + h_bar + gap_id_bar
+    c.drawCentredString(ax + (aw / 2), y_id, dados["id_fedex"])
+
+    c.setFont("Helvetica", code_f)
+    c.drawCentredString(ax + (aw / 2), y_code, codigo)
 
 
 def _gerar_pdf_bytes(
@@ -645,14 +691,15 @@ def main() -> None:
             st.session_state["origem_rede_prev"] = origem
             st.session_state["cred_code"] = cred_sugerido if cred_sugerido in CRED_CODES else ""
 
-        r1, r2, r3 = st.columns(3)
+        r1, r2, r3, r4 = st.columns(4)
         tecnologia = r1.text_input("Tecnologia * (texto, max 3)", max_chars=3).strip()
         nota_fiscal = r2.text_input("Nota Fiscal * (max 8)", max_chars=8).strip()
         os_num = r3.text_input("OS * (max 10)", max_chars=10).strip()
-        r4, r5, r6 = st.columns([1, 2, 1])
-        r4.text_input("Data Emissao", value=datetime.now().strftime("%d/%m/%Y"), disabled=True)
-        numero_cred = r5.selectbox("Numero CRED *", [""] + CRED_CODES, key="cred_code")
-        volume_total = r6.text_input("Volume *", max_chars=3).strip()
+        id_fedex = r4.text_input("ID FEDEX * (max 10)", max_chars=10).strip()
+        r5, r6, r7 = st.columns([1, 2, 1])
+        r5.text_input("Data Emissao", value=datetime.now().strftime("%d/%m/%Y"), disabled=True)
+        numero_cred = r6.selectbox("Numero CRED *", [""] + CRED_CODES, key="cred_code")
+        volume_total = r7.text_input("Volume *", max_chars=3).strip()
         if cred_sugerido:
             st.caption(f"CRED sugerido pela Origem: {cred_sugerido}")
     else:
@@ -663,7 +710,7 @@ def main() -> None:
         romaneio_sufixo = o2.text_input("Romaneio (numeros apos /) *", max_chars=20).strip()
         o3, o4 = st.columns(2)
         nr_nf = o3.text_input("NR NF *", max_chars=20).strip()
-        id_fedex = o4.text_input("ID FEDEX *", max_chars=20).strip()
+        id_fedex = o4.text_input("ID FEDEX *", max_chars=10).strip()
         volume_total = st.text_input("Volume (qtd total de etiquetas) *", max_chars=3).strip()
 
     st.subheader("Configuracao da Etiqueta")
@@ -750,8 +797,10 @@ def main() -> None:
         if dados["mode"] == "REDE":
             e = etiquetas[0]
             volumes_preview = [item["volume"] for item in etiquetas[:40]]
+            codigos_preview = [f"{item['volume']} -> {item['codigo_barras']}" for item in etiquetas[:40]]
             if len(etiquetas) > 40:
                 volumes_preview.append(f"... (mostrando 40 de {len(etiquetas)} etiquetas)")
+                codigos_preview.append(f"... (mostrando 40 de {len(etiquetas)} etiquetas)")
             st.code(
                 (
                     f"Titulo: {e['titulo']}\n"
@@ -762,9 +811,12 @@ def main() -> None:
                     f"Nota Fiscal: {e['nota_fiscal']}\n"
                     f"Data Emissao: {e['data_emissao']}\n"
                     f"OS: {e['os']}\n"
+                    f"ID FEDEX: {e['id_fedex']}\n"
                     f"Quantidade de etiquetas: {len(etiquetas)}\n"
                     "Volumes:\n"
                     + "\n".join(volumes_preview)
+                    + "\n\nVolumes / Codigos:\n"
+                    + "\n".join(codigos_preview)
                 ),
                 language="text",
             )

@@ -269,7 +269,7 @@ class EtiquetaColetaApp:
             self.frame_nao_rede,
             textvariable=self.id_fedex_var,
             validate="key",
-            validatecommand=self.vcmd_digitos,
+            validatecommand=self.vcmd_os_10,
         ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=(0, 8))
 
         ttk.Label(self.frame_nao_rede, text="Volume (qtd total):").grid(
@@ -320,18 +320,18 @@ class EtiquetaColetaApp:
             width=14,
         ).grid(row=1, column=2, sticky="w", padx=(0, 8))
 
-        ttk.Label(self.frame_rede, text="Volume (qtd total):").grid(row=0, column=3, sticky="w", pady=(2, 0))
+        ttk.Label(self.frame_rede, text="ID FEDEX:").grid(row=0, column=3, sticky="w", pady=(2, 0))
         ttk.Entry(
             self.frame_rede,
-            textvariable=self.volume_qtd_var,
+            textvariable=self.id_fedex_var,
             validate="key",
-            validatecommand=self.vcmd_volume,
+            validatecommand=self.vcmd_os_10,
             width=14,
         ).grid(row=1, column=3, sticky="w")
 
         ttk.Label(self.frame_rede, text="Numero CRED:").grid(row=2, column=0, sticky="w", pady=(10, 0))
         cred_frame = ttk.Frame(self.frame_rede)
-        cred_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=(0, 8))
+        cred_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=(0, 8))
         cred_frame.columnconfigure(0, weight=1)
         self.lb_cred = tk.Listbox(cred_frame, height=6, exportselection=False)
         self.lb_cred.grid(row=0, column=0, sticky="ew")
@@ -342,6 +342,15 @@ class EtiquetaColetaApp:
             self.lb_cred.insert(tk.END, cred_code)
         if CRED_CODES:
             self.lb_cred.selection_set(0)
+
+        ttk.Label(self.frame_rede, text="Volume (qtd total):").grid(row=2, column=2, sticky="w", pady=(10, 0))
+        ttk.Entry(
+            self.frame_rede,
+            textvariable=self.volume_qtd_var,
+            validate="key",
+            validatecommand=self.vcmd_volume,
+            width=14,
+        ).grid(row=3, column=2, sticky="w", padx=(0, 8))
 
         ttk.Label(self.frame_rede, text="Data Emissao:").grid(row=2, column=3, sticky="w", pady=(10, 0))
         self.rede_data_emissao_entry = ttk.Entry(self.frame_rede, state="readonly", width=14)
@@ -570,6 +579,7 @@ class EtiquetaColetaApp:
             tecnologia = self.tecnologia_var.get().strip().upper()
             nota_fiscal = self.nota_fiscal_var.get().strip()
             os_num = self.os_var.get().strip()
+            id_fedex = self.id_fedex_var.get().strip()
             volume_qtd = self.volume_qtd_var.get().strip()
             cred_label = self._valor_listbox(self.lb_cred, "Numero CRED")
             if not cred_label:
@@ -596,6 +606,12 @@ class EtiquetaColetaApp:
             if not os_num.isdigit() or len(os_num) > 10:
                 messagebox.showerror("Campo invalido", "OS aceita somente numeros (max 10).")
                 return None
+            if not id_fedex:
+                messagebox.showerror("Campo obrigatorio", "Informe o campo ID FEDEX.")
+                return None
+            if not id_fedex.isdigit() or len(id_fedex) > 10:
+                messagebox.showerror("Campo invalido", "ID FEDEX aceita somente numeros (max 10).")
+                return None
             if not volume_qtd:
                 messagebox.showerror(
                     "Campo obrigatorio", "Informe o campo Volume (qtd total)."
@@ -617,6 +633,7 @@ class EtiquetaColetaApp:
             etiquetas = []
             for indice in range(1, total_volumes + 1):
                 vol_atual_fmt = str(indice).zfill(3)
+                volume_num = f"{vol_atual_fmt}{vol_total_fmt}"
                 etiquetas.append(
                     {
                         "mode": "REDE",
@@ -629,7 +646,9 @@ class EtiquetaColetaApp:
                         "nota_fiscal": nota_fiscal,
                         "data_emissao": data_emissao,
                         "os": os_num,
+                        "id_fedex": id_fedex,
                         "volume": f"{vol_atual_fmt}/{vol_total_fmt}",
+                        "codigo_barras": f"{nota_fiscal}{os_num}{volume_num}",
                     }
                 )
             return {
@@ -661,8 +680,8 @@ class EtiquetaColetaApp:
         if not id_fedex:
             messagebox.showerror("Campo obrigatorio", "Informe o campo ID FEDEX.")
             return None
-        if not id_fedex.isdigit():
-            messagebox.showerror("Campo invalido", "ID FEDEX aceita apenas numeros.")
+        if not id_fedex.isdigit() or len(id_fedex) > 10:
+            messagebox.showerror("Campo invalido", "ID FEDEX aceita somente numeros (max 10).")
             return None
         if not volume_qtd:
             messagebox.showerror(
@@ -723,8 +742,14 @@ class EtiquetaColetaApp:
             e = etiquetas[0]
             limite_preview = 40
             volumes_preview = [item["volume"] for item in etiquetas[:limite_preview]]
+            codigos_preview = [
+                f"{item['volume']} -> {item['codigo_barras']}" for item in etiquetas[:limite_preview]
+            ]
             if total > limite_preview:
                 volumes_preview.append(
+                    f"... (mostrando {limite_preview} de {total} etiquetas)"
+                )
+                codigos_preview.append(
                     f"... (mostrando {limite_preview} de {total} etiquetas)"
                 )
             texto = (
@@ -736,9 +761,12 @@ class EtiquetaColetaApp:
                 f"Nota Fiscal: {e['nota_fiscal']}\n"
                 f"Data Emissao: {e['data_emissao']}\n"
                 f"OS: {e['os']}\n"
+                f"ID FEDEX: {e['id_fedex']}\n"
                 f"Quantidade de etiquetas: {total}\n"
                 "Volumes:\n"
                 + "\n".join(volumes_preview)
+                + "\n\nVolumes / Codigos:\n"
+                + "\n".join(codigos_preview)
             )
         else:
             limite_preview = 80
@@ -769,7 +797,12 @@ class EtiquetaColetaApp:
 
     def _atualizar_campo_codigo(self, dados: dict) -> None:
         if dados["mode"] == "REDE":
-            self.codigo_barras_var.set("-")
+            etiquetas = dados["etiquetas"]
+            primeiro = etiquetas[0]["codigo_barras"]
+            if len(etiquetas) == 1:
+                self.codigo_barras_var.set(primeiro)
+            else:
+                self.codigo_barras_var.set(f"{primeiro} (+{len(etiquetas) - 1})")
             return
         etiquetas = dados["etiquetas"]
         primeiro = etiquetas[0]["codigo_barras"]
@@ -1033,7 +1066,22 @@ class EtiquetaColetaApp:
         titulo_font = self._clamp(10.5 * escala * escala_fonte_usuario, 7, 36)
         label_font = self._clamp(8.4 * escala * escala_fonte_usuario, 6, 28)
         valor_font = self._clamp(8.8 * escala * escala_fonte_usuario, 6, 28)
+        fonte_codigo = self._clamp(7.8 * escala * escala_fonte_usuario, 5.5, 14)
+        fonte_identificador = self._clamp(7.0 * escala * escala_fonte_usuario, 5.0, 12)
         gap = max(2.0, 1.7 * MM_TO_POINTS * escala) + (espacamento_extra * 1.35)
+        altura_codigo = fonte_codigo * 1.35
+        altura_identificador = fonte_identificador * 1.35
+        altura_barcode = self._clamp(area_altura * 0.13, 7 * MM_TO_POINTS, area_altura * 0.18)
+        gap_identificador_barra = max(1.8, 1.0 * MM_TO_POINTS * escala)
+        gap_barra_codigo = max(1.8, 0.95 * MM_TO_POINTS * escala)
+        bloco_barcode_altura = (
+            altura_codigo
+            + gap_barra_codigo
+            + altura_barcode
+            + gap_identificador_barra
+            + altura_identificador
+        )
+        gap_bloco_barcode = max(2.4, 1.8 * MM_TO_POINTS * escala)
 
         y_topo = area_y + area_altura
         y_titulo = y_topo - titulo_font
@@ -1058,8 +1106,10 @@ class EtiquetaColetaApp:
 
         header_gap = max(gap * 1.1, label_font * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
         rodape_margem = max(gap * 1.1, label_font) + (espacamento_extra * 0.45)
+        rodape_linha_gap = max(label_font * 1.2, gap * 1.15)
+        rodape_secao = rodape_linha_gap + max(label_font, valor_font) + max(1.5, gap * 0.25)
         topo_texto = y_linha - header_gap
-        base_rodape = area_y + rodape_margem + ajuste_rodape
+        base_rodape = area_y + bloco_barcode_altura + gap_bloco_barcode + rodape_secao + ajuste_rodape
         altura_disponivel = topo_texto - base_rodape
         altura_necessaria = (len(campos) * max(label_font, valor_font)) + (
             (len(campos) - 1) * gap
@@ -1074,6 +1124,7 @@ class EtiquetaColetaApp:
                     espacamento_extra * 0.65
                 )
                 rodape_margem = max(gap * 1.1, label_font) + (espacamento_extra * 0.45)
+                rodape_linha_gap = max(label_font * 1.2, gap * 1.15)
 
         c.setFont("Helvetica-Bold", label_font)
         maior_label = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_font) for k, _ in campos)
@@ -1091,15 +1142,43 @@ class EtiquetaColetaApp:
         # Usa o mesmo ajuste de "Espacamento (pt)" para a folga entre Volume e rodape.
         folga_volume_rodape = max(0.0, espacamento_extra)
         rodape_texto_y = max(
-            area_y + rodape_margem,
+            area_y + bloco_barcode_altura + gap_bloco_barcode + rodape_margem,
             y_texto + (gap * 0.2) - folga_volume_rodape,
         ) + ajuste_rodape
-        rodape_linha_gap = max(label_font * 1.2, gap * 1.15)
         rodape_linha_y = rodape_texto_y + rodape_linha_gap
         c.line(area_x, rodape_linha_y, area_x + area_largura, rodape_linha_y)
         c.setFont("Helvetica-Bold", label_font)
         c.drawString(area_x, rodape_texto_y, f"Ordem Servico: {dados['os']}")
         c.drawRightString(area_x + area_largura, rodape_texto_y, f"Nota Fiscal: {dados['nota_fiscal']}")
+
+        codigo = dados["codigo_barras"]
+        largura_alvo = area_largura * 0.78
+        modulos_estimados = max(80, (11 * len(codigo)) + 35)
+        bar_width = self._clamp(largura_alvo / modulos_estimados, 0.16, 1.6)
+        barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+
+        for _ in range(20):
+            if barcode.width > area_largura * 0.82 and bar_width > 0.14:
+                bar_width *= 0.95
+                barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+                continue
+            if barcode.width < area_largura * 0.72 and bar_width < 2.0:
+                bar_width *= 1.03
+                barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
+                continue
+            break
+
+        codigo_y = area_y
+        barcode_y = codigo_y + altura_codigo + gap_barra_codigo
+        barcode_x = area_x + ((area_largura - barcode.width) / 2)
+        barcode.drawOn(c, barcode_x, barcode_y)
+
+        id_y = barcode_y + altura_barcode + gap_identificador_barra
+        c.setFont("Helvetica", fonte_identificador)
+        c.drawCentredString(area_x + (area_largura / 2), id_y, dados["id_fedex"])
+
+        c.setFont("Helvetica", fonte_codigo)
+        c.drawCentredString(area_x + (area_largura / 2), codigo_y, codigo)
 
     def _gerar_pdf_etiqueta(self, caminho_pdf: Path, dados_lote: dict) -> bool:
         if not REPORTLAB_AVAILABLE:
