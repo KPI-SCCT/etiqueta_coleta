@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from etiqueta_layout_engine import draw_template_padrao, draw_template_rede
+
 try:
     from reportlab.graphics.barcode import code128
     from reportlab.lib.pagesizes import A4
@@ -37,6 +39,11 @@ except Exception:
 APP_NAME = "COLETA"
 PROJETO_REDE = "REDE"
 PLANILHA_BASE_CRED = "bases padrÃ£o + cred.xlsx"
+FONT_FAMILY_SEGOE_UI = "Segoe UI"
+MSG_CAMPO_OBRIGATORIO = "Campo obrigatorio"
+MSG_CAMPO_INVALIDO = "Campo invalido"
+MSG_TAMANHO_INVALIDO = "Tamanho invalido"
+MSG_AJUSTE_INVALIDO = "Ajuste invalido"
 DESTINOS = ["CTDI DO BR - SP", "FLEXTRONIC", "FEDEX CAJAMAR - SP", "DHL LOUVEIRA - SP"]
 PROJETOS = [
     "CIELO - POS",
@@ -138,12 +145,6 @@ def _label_por_codigo_cred(codigo: str) -> str:
     return (codigo or "").strip().upper()
 
 
-def _codigo_por_label_cred(label: str) -> str:
-    if not label:
-        return ""
-    return label.strip().upper()
-
-
 class EtiquetaColetaApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -158,7 +159,6 @@ class EtiquetaColetaApp:
         self.tecnologia_var = tk.StringVar()
         self.nota_fiscal_var = tk.StringVar()
         self.os_var = tk.StringVar()
-        self.numero_cred_var = tk.StringVar()
         self.codigo_barras_var = tk.StringVar()
         self.etiqueta_largura_var = tk.StringVar(value=DEFAULT_CONFIG_OUTROS["largura_mm"])
         self.etiqueta_altura_var = tk.StringVar(value=DEFAULT_CONFIG_OUTROS["altura_mm"])
@@ -193,10 +193,14 @@ class EtiquetaColetaApp:
             frame.columnconfigure(col, weight=1)
 
         ttk.Label(
-            frame, text=APP_NAME, font=("Segoe UI", 13, "bold")
+            frame, text=APP_NAME, font=(FONT_FAMILY_SEGOE_UI, 13, "bold")
         ).grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
 
-        ttk.Label(frame, text="Sessao 1 - Origem / Destino / Projeto", font=("Segoe UI", 10, "bold")).grid(
+        ttk.Label(
+            frame,
+            text="Sessao 1 - Origem / Destino / Projeto",
+            font=(FONT_FAMILY_SEGOE_UI, 10, "bold"),
+        ).grid(
             row=1, column=0, columnspan=4, sticky="w", pady=(6, 4)
         )
 
@@ -229,7 +233,11 @@ class EtiquetaColetaApp:
         self.lb_projeto.selection_set(0)
         self.lb_projeto.bind("<<ListboxSelect>>", self._on_projeto_change)
 
-        ttk.Label(frame, text="Sessao 2 - Campos do Projeto", font=("Segoe UI", 10, "bold")).grid(
+        ttk.Label(
+            frame,
+            text="Sessao 2 - Campos do Projeto",
+            font=(FONT_FAMILY_SEGOE_UI, 10, "bold"),
+        ).grid(
             row=4, column=0, columnspan=4, sticky="w", pady=(10, 4)
         )
 
@@ -246,7 +254,7 @@ class EtiquetaColetaApp:
             textvariable=self.romaneio_prefixo_var,
             width=7,
             anchor="w",
-            font=("Segoe UI", 10, "bold"),
+            font=(FONT_FAMILY_SEGOE_UI, 10, "bold"),
         ).pack(side=tk.LEFT)
         ttk.Entry(
             romaneio_frame,
@@ -284,7 +292,7 @@ class EtiquetaColetaApp:
             validate="key",
             validatecommand=self.vcmd_volume,
         ).pack(side=tk.LEFT)
-        ttk.Label(volume_frame, text="(max 3 digitos)", font=("Segoe UI", 9)).pack(
+        ttk.Label(volume_frame, text="(max 3 digitos)", font=(FONT_FAMILY_SEGOE_UI, 9)).pack(
             side=tk.LEFT, padx=(8, 0)
         )
 
@@ -356,7 +364,11 @@ class EtiquetaColetaApp:
         self.rede_data_emissao_entry = ttk.Entry(self.frame_rede, state="readonly", width=14)
         self.rede_data_emissao_entry.grid(row=3, column=3, sticky="w")
 
-        ttk.Label(frame, text="Sessao 3 - Configuracao da Etiqueta", font=("Segoe UI", 10, "bold")).grid(
+        ttk.Label(
+            frame,
+            text="Sessao 3 - Configuracao da Etiqueta",
+            font=(FONT_FAMILY_SEGOE_UI, 10, "bold"),
+        ).grid(
             row=6, column=0, columnspan=4, sticky="w", pady=(12, 4)
         )
         tamanho_frame = ttk.Frame(frame)
@@ -486,10 +498,6 @@ class EtiquetaColetaApp:
         except ValueError:
             return False
 
-    @staticmethod
-    def _clamp(valor: float, minimo: float, maximo: float) -> float:
-        return max(minimo, min(valor, maximo))
-
     def _on_origem_change(self, _: tk.Event) -> None:
         self._preencher_cred_por_origem()
 
@@ -562,142 +570,119 @@ class EtiquetaColetaApp:
         selecao = listbox.curselection()
         if not selecao:
             if exibir_erro:
-                messagebox.showerror("Campo obrigatorio", f"Selecione um valor para {campo}.")
+                messagebox.showerror(MSG_CAMPO_OBRIGATORIO, f"Selecione um valor para {campo}.")
             return ""
         return listbox.get(selecao[0])
 
-    def _coletar_dados(self) -> dict | None:
-        origem = self._valor_listbox(self.lb_origem, "Origem")
-        destino = self._valor_listbox(self.lb_destino, "Destino")
-        projeto = self._valor_listbox(self.lb_projeto, "Projeto")
-        if not origem or not destino or not projeto:
+    def _validar_campo_numerico(
+        self, campo: str, valor: str, max_digitos: int | None = None
+    ) -> bool:
+        if not valor:
+            messagebox.showerror(MSG_CAMPO_OBRIGATORIO, f"Informe o campo {campo}.")
+            return False
+        if not valor.isdigit():
+            messagebox.showerror(MSG_CAMPO_INVALIDO, f"{campo} aceita apenas numeros.")
+            return False
+        if max_digitos is not None and len(valor) > max_digitos:
+            messagebox.showerror(
+                MSG_CAMPO_INVALIDO, f"{campo} aceita somente numeros (max {max_digitos})."
+            )
+            return False
+        return True
+
+    def _validar_volume_total(self, volume_qtd: str) -> int | None:
+        if not self._validar_campo_numerico("Volume", volume_qtd, 3):
+            return None
+        total_volumes = int(volume_qtd)
+        if total_volumes <= 0:
+            messagebox.showerror(MSG_CAMPO_INVALIDO, "O campo Volume deve ser maior que zero.")
+            return None
+        return total_volumes
+
+    def _coletar_dados_rede(
+        self, origem: str, destino: str, projeto: str, data_emissao: str
+    ) -> dict | None:
+        tecnologia = self.tecnologia_var.get().strip().upper()
+        nota_fiscal = self.nota_fiscal_var.get().strip()
+        os_num = self.os_var.get().strip()
+        id_fedex = self.id_fedex_var.get().strip()
+        volume_qtd = self.volume_qtd_var.get().strip()
+        cred_label = self._valor_listbox(self.lb_cred, "Numero CRED")
+        if not cred_label:
             return None
 
-        data_emissao = datetime.now().strftime("%d/%m/%Y")
+        if not tecnologia:
+            messagebox.showerror(MSG_CAMPO_OBRIGATORIO, "Informe o campo Tecnologia.")
+            return None
+        if len(tecnologia) > 3:
+            messagebox.showerror(MSG_CAMPO_INVALIDO, "Tecnologia permite no maximo 3 caracteres.")
+            return None
+        if not re.fullmatch(r"[A-Za-z]{1,3}", tecnologia):
+            messagebox.showerror(MSG_CAMPO_INVALIDO, "Tecnologia aceita apenas texto (letras).")
+            return None
+        if not self._validar_campo_numerico("Nota Fiscal", nota_fiscal, 8):
+            return None
+        if not self._validar_campo_numerico("OS", os_num, 10):
+            return None
+        if not self._validar_campo_numerico("ID FEDEX", id_fedex, 10):
+            return None
 
-        if projeto == PROJETO_REDE:
-            tecnologia = self.tecnologia_var.get().strip().upper()
-            nota_fiscal = self.nota_fiscal_var.get().strip()
-            os_num = self.os_var.get().strip()
-            id_fedex = self.id_fedex_var.get().strip()
-            volume_qtd = self.volume_qtd_var.get().strip()
-            cred_label = self._valor_listbox(self.lb_cred, "Numero CRED")
-            if not cred_label:
-                return None
+        total_volumes = self._validar_volume_total(volume_qtd)
+        if total_volumes is None:
+            return None
 
-            if not tecnologia:
-                messagebox.showerror("Campo obrigatorio", "Informe o campo Tecnologia.")
-                return None
-            if len(tecnologia) > 3:
-                messagebox.showerror("Campo invalido", "Tecnologia permite no maximo 3 caracteres.")
-                return None
-            if not re.fullmatch(r"[A-Za-z]{1,3}", tecnologia):
-                messagebox.showerror("Campo invalido", "Tecnologia aceita apenas texto (letras).")
-                return None
-            if not nota_fiscal:
-                messagebox.showerror("Campo obrigatorio", "Informe o campo Nota Fiscal.")
-                return None
-            if not nota_fiscal.isdigit() or len(nota_fiscal) > 8:
-                messagebox.showerror("Campo invalido", "Nota Fiscal aceita somente numeros (max 8).")
-                return None
-            if not os_num:
-                messagebox.showerror("Campo obrigatorio", "Informe o campo OS.")
-                return None
-            if not os_num.isdigit() or len(os_num) > 10:
-                messagebox.showerror("Campo invalido", "OS aceita somente numeros (max 10).")
-                return None
-            if not id_fedex:
-                messagebox.showerror("Campo obrigatorio", "Informe o campo ID FEDEX.")
-                return None
-            if not id_fedex.isdigit() or len(id_fedex) > 10:
-                messagebox.showerror("Campo invalido", "ID FEDEX aceita somente numeros (max 10).")
-                return None
-            if not volume_qtd:
-                messagebox.showerror(
-                    "Campo obrigatorio", "Informe o campo Volume (qtd total)."
-                )
-                return None
-            if not volume_qtd.isdigit():
-                messagebox.showerror("Campo invalido", "Volume aceita apenas numeros.")
-                return None
-            if len(volume_qtd) > 3:
-                messagebox.showerror("Campo invalido", "Volume permite no maximo 3 digitos.")
-                return None
+        vol_total_fmt = str(total_volumes).zfill(3)
+        etiquetas = []
+        for indice in range(1, total_volumes + 1):
+            vol_atual_fmt = str(indice).zfill(3)
+            volume_num = f"{vol_atual_fmt}{vol_total_fmt}"
+            etiquetas.append(
+                {
+                    "mode": "REDE",
+                    "titulo": "OPERACAO REVERSA",
+                    "tecnologia": tecnologia,
+                    "origem": origem,
+                    "destino": destino,
+                    "projeto": projeto,
+                    "numero_cred_label": cred_label,
+                    "nota_fiscal": nota_fiscal,
+                    "data_emissao": data_emissao,
+                    "os": os_num,
+                    "id_fedex": id_fedex,
+                    "volume": f"{vol_atual_fmt}/{vol_total_fmt}",
+                    "codigo_barras": f"{nota_fiscal}{os_num}{volume_num}",
+                }
+            )
+        return {
+            "mode": "REDE",
+            "origem": origem,
+            "destino": destino,
+            "projeto": projeto,
+            "volume_total": total_volumes,
+            "etiquetas": etiquetas,
+        }
 
-            total_volumes = int(volume_qtd)
-            if total_volumes <= 0:
-                messagebox.showerror("Campo invalido", "O campo Volume deve ser maior que zero.")
-                return None
-
-            vol_total_fmt = str(total_volumes).zfill(3)
-            etiquetas = []
-            for indice in range(1, total_volumes + 1):
-                vol_atual_fmt = str(indice).zfill(3)
-                volume_num = f"{vol_atual_fmt}{vol_total_fmt}"
-                etiquetas.append(
-                    {
-                        "mode": "REDE",
-                        "titulo": "OPERACAO REVERSA",
-                        "tecnologia": tecnologia,
-                        "origem": origem,
-                        "destino": destino,
-                        "projeto": projeto,
-                        "numero_cred_label": cred_label,
-                        "nota_fiscal": nota_fiscal,
-                        "data_emissao": data_emissao,
-                        "os": os_num,
-                        "id_fedex": id_fedex,
-                        "volume": f"{vol_atual_fmt}/{vol_total_fmt}",
-                        "codigo_barras": f"{nota_fiscal}{os_num}{volume_num}",
-                    }
-                )
-            return {
-                "mode": "REDE",
-                "origem": origem,
-                "destino": destino,
-                "projeto": projeto,
-                "volume_total": total_volumes,
-                "etiquetas": etiquetas,
-            }
-
+    def _coletar_dados_padrao(
+        self, origem: str, destino: str, projeto: str, data_emissao: str
+    ) -> dict | None:
         sufixo_romaneio = self.romaneio_sufixo_var.get().strip()
         nr_nf = self.nr_nf_var.get().strip()
         id_fedex = self.id_fedex_var.get().strip()
         volume_qtd = self.volume_qtd_var.get().strip()
 
         if not sufixo_romaneio:
-            messagebox.showerror("Campo obrigatorio", "Informe os numeros do Romaneio.")
+            messagebox.showerror(MSG_CAMPO_OBRIGATORIO, "Informe os numeros do Romaneio.")
             return None
         if not sufixo_romaneio.isdigit():
-            messagebox.showerror("Campo invalido", "Romaneio aceita apenas numeros.")
+            messagebox.showerror(MSG_CAMPO_INVALIDO, "Romaneio aceita apenas numeros.")
             return None
-        if not nr_nf:
-            messagebox.showerror("Campo obrigatorio", "Informe o campo NR NF.")
+        if not self._validar_campo_numerico("NR NF", nr_nf):
             return None
-        if not nr_nf.isdigit():
-            messagebox.showerror("Campo invalido", "NR NF aceita apenas numeros.")
-            return None
-        if not id_fedex:
-            messagebox.showerror("Campo obrigatorio", "Informe o campo ID FEDEX.")
-            return None
-        if not id_fedex.isdigit() or len(id_fedex) > 10:
-            messagebox.showerror("Campo invalido", "ID FEDEX aceita somente numeros (max 10).")
-            return None
-        if not volume_qtd:
-            messagebox.showerror(
-                "Campo obrigatorio", "Informe o campo Volume (qtd total)."
-            )
-            return None
-        if not volume_qtd.isdigit():
-            messagebox.showerror("Campo invalido", "Volume aceita apenas numeros.")
-            return None
-        if len(volume_qtd) > 3:
-            messagebox.showerror("Campo invalido", "Volume permite no maximo 3 digitos.")
+        if not self._validar_campo_numerico("ID FEDEX", id_fedex, 10):
             return None
 
-        total_volumes = int(volume_qtd)
-        if total_volumes <= 0:
-            messagebox.showerror("Campo invalido", "O campo Volume deve ser maior que zero.")
+        total_volumes = self._validar_volume_total(volume_qtd)
+        if total_volumes is None:
             return None
 
         romaneio = f"{PREFIXOS_ROMANEIO[projeto]}{sufixo_romaneio}"
@@ -734,6 +719,18 @@ class EtiquetaColetaApp:
             "volume_total": total_volumes,
             "etiquetas": etiquetas,
         }
+
+    def _coletar_dados(self) -> dict | None:
+        origem = self._valor_listbox(self.lb_origem, "Origem")
+        destino = self._valor_listbox(self.lb_destino, "Destino")
+        projeto = self._valor_listbox(self.lb_projeto, "Projeto")
+        if not origem or not destino or not projeto:
+            return None
+
+        data_emissao = datetime.now().strftime("%d/%m/%Y")
+        if projeto == PROJETO_REDE:
+            return self._coletar_dados_rede(origem, destino, projeto, data_emissao)
+        return self._coletar_dados_padrao(origem, destino, projeto, data_emissao)
 
     def _atualizar_preview(self, dados: dict) -> None:
         etiquetas = dados["etiquetas"]
@@ -825,12 +822,12 @@ class EtiquetaColetaApp:
             largura_mm = float(largura_txt)
             altura_mm = float(altura_txt)
         except ValueError:
-            messagebox.showerror("Tamanho invalido", "Informe largura/altura validas em mm.")
+            messagebox.showerror(MSG_TAMANHO_INVALIDO, "Informe largura/altura validas em mm.")
             return None, None
 
         if largura_mm <= 0 or altura_mm <= 0:
             messagebox.showerror(
-                "Tamanho invalido", "Largura e altura da etiqueta devem ser maiores que zero."
+                MSG_TAMANHO_INVALIDO, "Largura e altura da etiqueta devem ser maiores que zero."
             )
             return None, None
         return largura_mm * MM_TO_POINTS, altura_mm * MM_TO_POINTS
@@ -847,22 +844,24 @@ class EtiquetaColetaApp:
             ajuste_rodape = float(ajuste_rodape_txt)
         except ValueError:
             messagebox.showerror(
-                "Ajuste invalido",
+                MSG_AJUSTE_INVALIDO,
                 "Informe valores validos para Espacamento, Escala fonte, Ajuste cabecalho e Ajuste rodape.",
             )
             return None, None, None, None
 
         if espacamento_extra < 0:
-            messagebox.showerror("Ajuste invalido", "Espacamento deve ser maior ou igual a zero.")
+            messagebox.showerror(MSG_AJUSTE_INVALIDO, "Espacamento deve ser maior ou igual a zero.")
             return None, None, None, None
         if escala_fonte <= 0:
-            messagebox.showerror("Ajuste invalido", "Escala fonte deve ser maior que zero.")
+            messagebox.showerror(MSG_AJUSTE_INVALIDO, "Escala fonte deve ser maior que zero.")
             return None, None, None, None
         if ajuste_cabecalho < 0:
-            messagebox.showerror("Ajuste invalido", "Ajuste cabecalho deve ser maior ou igual a zero.")
+            messagebox.showerror(
+                MSG_AJUSTE_INVALIDO, "Ajuste cabecalho deve ser maior ou igual a zero."
+            )
             return None, None, None, None
         if ajuste_rodape < 0:
-            messagebox.showerror("Ajuste invalido", "Ajuste rodape deve ser maior ou igual a zero.")
+            messagebox.showerror(MSG_AJUSTE_INVALIDO, "Ajuste rodape deve ser maior ou igual a zero.")
             return None, None, None, None
         return espacamento_extra, escala_fonte, ajuste_cabecalho, ajuste_rodape
 
@@ -881,7 +880,7 @@ class EtiquetaColetaApp:
         if colunas < 1 or linhas < 1:
             if exibir_erro:
                 messagebox.showerror(
-                    "Tamanho invalido",
+                    MSG_TAMANHO_INVALIDO,
                     "Com esse tamanho de etiqueta nao cabe nenhuma unidade na folha A4.\n"
                     "Reduza largura/altura.",
                 )
@@ -917,129 +916,21 @@ class EtiquetaColetaApp:
         espacamento_extra: float,
         escala_fonte_usuario: float,
         ajuste_cabecalho: float = 0.0,
-        ajuste_rodape: float = 0.0,
     ) -> None:
-        referencia_largura = 105 * MM_TO_POINTS
-        referencia_altura = 148.5 * MM_TO_POINTS
-        escala_etiqueta = min(largura_pt / referencia_largura, altura_pt / referencia_altura)
-
-        borda = self._clamp(0.85 * escala_etiqueta, 0.6, 1.4)
-        c.setLineWidth(borda)
-        c.rect(x, y, largura_pt, altura_pt)
-
-        pad = max(3.5 * MM_TO_POINTS, 6 * MM_TO_POINTS * escala_etiqueta)
-        area_x = x + pad
-        area_y = y + pad
-        area_largura = largura_pt - (2 * pad)
-        area_altura = altura_pt - (2 * pad)
-
-        linhas = [
-            ("ORIGEM", dados["origem"]),
-            ("DESTINO", dados["destino"]),
-            ("ROMANEIO", dados["romaneio"]),
-            ("PROJETO", dados["projeto"]),
-            ("NR NF", dados["nr_nf"]),
-            ("VOLUME", dados["volume"]),
-        ]
-
-        escala_conteudo = self._clamp(escala_fonte_usuario, 0.6, 4.0)
-        # Suaviza o impacto da escala geral no titulo para evitar desproporcao.
-        escala_titulo = 1.0 + ((escala_conteudo - 1.0) * 0.35)
-        fonte_titulo = self._clamp(12 * escala_etiqueta * escala_titulo, 8, 34)
-        fonte_label = self._clamp(9.2 * escala_etiqueta * escala_conteudo, 6, 30)
-        fonte_valor = self._clamp(9.8 * escala_etiqueta * escala_conteudo, 6, 32)
-        fonte_codigo = self._clamp(8.2 * escala_etiqueta * escala_conteudo, 6, 24)
-        fonte_identificador = self._clamp(
-            7.0 * escala_etiqueta * escala_conteudo, 5.5, 18
+        draw_template_padrao(
+            c=c,
+            barcode_module=code128,
+            x=x,
+            y=y,
+            largura_pt=largura_pt,
+            altura_pt=altura_pt,
+            dados=dados,
+            mm_to_points=MM_TO_POINTS,
+            app_name=APP_NAME,
+            espacamento_extra=espacamento_extra,
+            escala_fonte_usuario=escala_fonte_usuario,
+            ajuste_cabecalho=ajuste_cabecalho,
         )
-        gap_linha = max(2.2, 1.8 * MM_TO_POINTS * escala_etiqueta) + (espacamento_extra * 1.35)
-        gap_bloco = max(4.0, 3 * MM_TO_POINTS * escala_etiqueta)
-
-        altura_codigo = fonte_codigo * 1.45
-        altura_identificador = fonte_identificador * 1.45
-        altura_barcode = self._clamp(
-            area_altura * 0.2, 10 * MM_TO_POINTS, area_altura * 0.26
-        )
-        gap_identificador_barra = max(2.2, 1.4 * MM_TO_POINTS * escala_etiqueta)
-        gap_barra_codigo = max(2.2, 1.3 * MM_TO_POINTS * escala_etiqueta)
-        bloco_barcode_altura = (
-            altura_codigo
-            + gap_barra_codigo
-            + altura_barcode
-            + gap_identificador_barra
-            + altura_identificador
-        )
-
-        y_topo = area_y + area_altura
-        y_titulo = y_topo - fonte_titulo
-        c.setFont("Helvetica-Bold", fonte_titulo)
-        c.drawCentredString(x + (largura_pt / 2), y_titulo, APP_NAME)
-
-        y_divisor = y_titulo - (gap_linha * 0.9)
-        c.setLineWidth(max(0.4, borda * 0.7))
-        c.line(area_x, y_divisor, area_x + area_largura, y_divisor)
-
-        header_gap = max(gap_bloco, gap_linha * 0.9) + ajuste_cabecalho + (espacamento_extra * 0.65)
-        y_detalhes_topo = y_divisor - header_gap
-        y_detalhes_base = area_y + bloco_barcode_altura + gap_bloco
-        altura_disponivel_detalhes = y_detalhes_topo - y_detalhes_base
-
-        passo_linha = max(fonte_label, fonte_valor) + gap_linha
-        altura_necessaria = (len(linhas) * max(fonte_label, fonte_valor)) + (
-            (len(linhas) - 1) * gap_linha
-        )
-        if altura_disponivel_detalhes > 0 and altura_necessaria > 0:
-            fator_auto = self._clamp(altura_disponivel_detalhes / altura_necessaria, 0.65, 1.55)
-            if abs(fator_auto - 1.0) > 0.03:
-                fonte_label *= fator_auto
-                fonte_valor *= fator_auto
-                gap_linha *= fator_auto
-        passo_linha = max(fonte_label, fonte_valor) + gap_linha
-
-        c.setFont("Helvetica-Bold", fonte_label)
-        largura_labels = max(
-            c.stringWidth(f"{titulo}:", "Helvetica-Bold", fonte_label) for titulo, _ in linhas
-        )
-        gap_label_valor = max(4, 2.4 * MM_TO_POINTS * escala_etiqueta)
-        valor_x = area_x + largura_labels + gap_label_valor
-
-        y_linha = y_detalhes_topo - max(fonte_label, fonte_valor)
-        for titulo, valor in linhas:
-            c.setFont("Helvetica-Bold", fonte_label)
-            c.drawString(area_x, y_linha, f"{titulo}:")
-            if valor:
-                c.setFont("Helvetica", fonte_valor)
-                c.drawString(valor_x, y_linha, valor)
-            y_linha -= passo_linha
-
-        codigo = dados["codigo_barras"]
-        largura_alvo = area_largura * 0.78
-        modulos_estimados = max(80, (11 * len(codigo)) + 35)
-        bar_width = self._clamp(largura_alvo / modulos_estimados, 0.16, 1.6)
-        barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
-
-        for _ in range(20):
-            if barcode.width > area_largura * 0.82 and bar_width > 0.14:
-                bar_width *= 0.95
-                barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
-                continue
-            if barcode.width < area_largura * 0.72 and bar_width < 2.0:
-                bar_width *= 1.03
-                barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
-                continue
-            break
-
-        codigo_y = area_y
-        barcode_y = codigo_y + altura_codigo + gap_barra_codigo
-        barcode_x = area_x + ((area_largura - barcode.width) / 2)
-        barcode.drawOn(c, barcode_x, barcode_y)
-
-        id_y = barcode_y + altura_barcode + gap_identificador_barra
-        c.setFont("Helvetica", fonte_identificador)
-        c.drawCentredString(area_x + (area_largura / 2), id_y, dados["id_fedex_data"])
-
-        c.setFont("Helvetica", fonte_codigo)
-        c.drawCentredString(area_x + (area_largura / 2), codigo_y, codigo)
 
     def _desenhar_etiqueta_rede_pdf(
         self,
@@ -1054,139 +945,20 @@ class EtiquetaColetaApp:
         ajuste_cabecalho: float = 0.0,
         ajuste_rodape: float = 0.0,
     ) -> None:
-        referencia_largura = 90 * MM_TO_POINTS
-        referencia_altura = 100 * MM_TO_POINTS
-        escala = min(largura_pt / referencia_largura, altura_pt / referencia_altura)
-
-        borda = self._clamp(0.9 * escala, 0.6, 1.4)
-        c.setLineWidth(borda)
-        c.rect(x, y, largura_pt, altura_pt)
-
-        pad = max(3.0 * MM_TO_POINTS, 5.0 * MM_TO_POINTS * escala)
-        area_x = x + pad
-        area_y = y + pad
-        area_largura = largura_pt - (2 * pad)
-        area_altura = altura_pt - (2 * pad)
-
-        escala_conteudo = self._clamp(escala_fonte_usuario, 0.6, 4.0)
-        # Suaviza o impacto da escala geral no titulo para evitar desproporcao.
-        escala_titulo = 1.0 + ((escala_conteudo - 1.0) * 0.35)
-        titulo_font = self._clamp(10.5 * escala * escala_titulo, 7, 28)
-        label_font = self._clamp(8.4 * escala * escala_conteudo, 6, 28)
-        valor_font = self._clamp(8.8 * escala * escala_conteudo, 6, 28)
-        fonte_codigo = self._clamp(7.8 * escala * escala_conteudo, 5.5, 14)
-        fonte_identificador = self._clamp(7.0 * escala * escala_conteudo, 5.0, 12)
-        gap = max(2.0, 1.7 * MM_TO_POINTS * escala) + (espacamento_extra * 1.35)
-        altura_codigo = fonte_codigo * 1.35
-        altura_identificador = fonte_identificador * 1.35
-        altura_barcode = self._clamp(area_altura * 0.13, 7 * MM_TO_POINTS, area_altura * 0.18)
-        gap_identificador_barra = max(1.8, 1.0 * MM_TO_POINTS * escala)
-        gap_barra_codigo = max(1.8, 0.95 * MM_TO_POINTS * escala)
-        bloco_barcode_altura = (
-            altura_codigo
-            + gap_barra_codigo
-            + altura_barcode
-            + gap_identificador_barra
-            + altura_identificador
+        draw_template_rede(
+            c=c,
+            barcode_module=code128,
+            x=x,
+            y=y,
+            largura_pt=largura_pt,
+            altura_pt=altura_pt,
+            dados=dados,
+            mm_to_points=MM_TO_POINTS,
+            espacamento_extra=espacamento_extra,
+            escala_fonte_usuario=escala_fonte_usuario,
+            ajuste_cabecalho=ajuste_cabecalho,
+            ajuste_rodape=ajuste_rodape,
         )
-        gap_bloco_barcode = max(2.4, 1.8 * MM_TO_POINTS * escala)
-
-        y_topo = area_y + area_altura
-        y_titulo = y_topo - titulo_font
-        c.setFont("Helvetica-Bold", titulo_font)
-        c.drawString(area_x, y_titulo, "OPERACAO REVERSA")
-        c.setFont("Helvetica-Bold", label_font)
-        c.drawRightString(area_x + area_largura, y_titulo, f"Tecnologia: {dados['tecnologia']}")
-
-        y_linha = y_titulo - (gap * 0.8)
-        c.setLineWidth(max(0.4, borda * 0.7))
-        c.line(area_x, y_linha, area_x + area_largura, y_linha)
-
-        campos = [
-            ("Origem", dados["origem"]),
-            ("Destino", dados["destino"]),
-            ("Numero CRED", dados["numero_cred_label"]),
-            ("Nota Fiscal", dados["nota_fiscal"]),
-            ("Data Emissao", dados["data_emissao"]),
-            ("OS", dados["os"]),
-            ("Volume", dados["volume"]),
-        ]
-
-        header_gap = max(gap * 1.1, label_font * 1.1) + ajuste_cabecalho + (espacamento_extra * 0.65)
-        rodape_margem = max(gap * 1.1, label_font) + (espacamento_extra * 0.45)
-        rodape_linha_gap = max(label_font * 1.2, gap * 1.15)
-        rodape_secao = rodape_linha_gap + max(label_font, valor_font) + max(1.5, gap * 0.25)
-        topo_texto = y_linha - header_gap
-        base_rodape = area_y + bloco_barcode_altura + gap_bloco_barcode + rodape_secao + ajuste_rodape
-        altura_disponivel = topo_texto - base_rodape
-        altura_necessaria = (len(campos) * max(label_font, valor_font)) + (
-            (len(campos) - 1) * gap
-        )
-        if altura_disponivel > 0 and altura_necessaria > 0:
-            fator = self._clamp(altura_disponivel / altura_necessaria, 0.6, 1.45)
-            if abs(fator - 1.0) > 0.03:
-                label_font *= fator
-                valor_font *= fator
-                gap *= fator
-                header_gap = max(gap * 1.1, label_font * 1.1) + ajuste_cabecalho + (
-                    espacamento_extra * 0.65
-                )
-                rodape_margem = max(gap * 1.1, label_font) + (espacamento_extra * 0.45)
-                rodape_linha_gap = max(label_font * 1.2, gap * 1.15)
-
-        c.setFont("Helvetica-Bold", label_font)
-        maior_label = max(c.stringWidth(f"{k}:", "Helvetica-Bold", label_font) for k, _ in campos)
-        valor_x = area_x + maior_label + max(5, 2.0 * MM_TO_POINTS * escala)
-
-        y_texto = y_linha - header_gap
-        passo = max(label_font, valor_font) + gap
-        for nome, valor in campos:
-            c.setFont("Helvetica-Bold", label_font)
-            c.drawString(area_x, y_texto, f"{nome}:")
-            c.setFont("Helvetica", valor_font)
-            c.drawString(valor_x, y_texto, str(valor))
-            y_texto -= passo
-
-        # Usa o mesmo ajuste de "Espacamento (pt)" para a folga entre Volume e rodape.
-        folga_volume_rodape = max(0.0, espacamento_extra)
-        rodape_texto_y = max(
-            area_y + bloco_barcode_altura + gap_bloco_barcode + rodape_margem,
-            y_texto + (gap * 0.2) - folga_volume_rodape,
-        ) + ajuste_rodape
-        rodape_linha_y = rodape_texto_y + rodape_linha_gap
-        c.line(area_x, rodape_linha_y, area_x + area_largura, rodape_linha_y)
-        c.setFont("Helvetica-Bold", label_font)
-        c.drawString(area_x, rodape_texto_y, f"Ordem Servico: {dados['os']}")
-        c.drawRightString(area_x + area_largura, rodape_texto_y, f"Nota Fiscal: {dados['nota_fiscal']}")
-
-        codigo = dados["codigo_barras"]
-        largura_alvo = area_largura * 0.78
-        modulos_estimados = max(80, (11 * len(codigo)) + 35)
-        bar_width = self._clamp(largura_alvo / modulos_estimados, 0.16, 1.6)
-        barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
-
-        for _ in range(20):
-            if barcode.width > area_largura * 0.82 and bar_width > 0.14:
-                bar_width *= 0.95
-                barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
-                continue
-            if barcode.width < area_largura * 0.72 and bar_width < 2.0:
-                bar_width *= 1.03
-                barcode = code128.Code128(codigo, barHeight=altura_barcode, barWidth=bar_width)
-                continue
-            break
-
-        codigo_y = area_y
-        barcode_y = codigo_y + altura_codigo + gap_barra_codigo
-        barcode_x = area_x + ((area_largura - barcode.width) / 2)
-        barcode.drawOn(c, barcode_x, barcode_y)
-
-        id_y = barcode_y + altura_barcode + gap_identificador_barra
-        c.setFont("Helvetica", fonte_identificador)
-        c.drawCentredString(area_x + (area_largura / 2), id_y, dados["id_fedex"])
-
-        c.setFont("Helvetica", fonte_codigo)
-        c.drawCentredString(area_x + (area_largura / 2), codigo_y, codigo)
 
     def _gerar_pdf_etiqueta(self, caminho_pdf: Path, dados_lote: dict) -> bool:
         if not REPORTLAB_AVAILABLE:
@@ -1254,7 +1026,6 @@ class EtiquetaColetaApp:
                         espacamento_extra,
                         escala_fonte_usuario,
                         ajuste_cabecalho,
-                        ajuste_rodape,
                     )
 
             c.showPage()
