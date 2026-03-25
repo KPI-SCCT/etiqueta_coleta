@@ -285,8 +285,8 @@ def _draw_barcode_area(
     scale_ref: float,
     scale_content: float,
 ) -> None:
-    # Da mais "respiro" lateral para leitura em impressoras termicas e scanners simples.
-    x, y, w, h = inset_box(box, max(4.0, box[2] * 0.06), max(1.4, box[3] * 0.05))
+    # Mantem uma zona de silencio lateral, mas deixa o codigo usar mais largura util.
+    x, y, w, h = inset_box(box, max(5.0, box[2] * 0.04), max(1.4, box[3] * 0.05))
     if w <= 0 or h <= 0:
         return
 
@@ -315,17 +315,17 @@ def _draw_barcode_area(
     code = _safe_text(code_value)
     if barcode_module is not None and code:
         modules = max(80, (11 * len(code)) + 35)
-        target_w = bar_box[2] * 0.70
-        bar_w = clamp(target_w / modules, 0.12, 1.35)
+        target_w = bar_box[2] * 0.86
+        bar_w = clamp(target_w / modules, 0.12, 1.15)
         draw_h = max(4.0, bar_box[3] * 0.88)
         barcode = barcode_module.Code128(code, barHeight=draw_h, barWidth=bar_w)
 
         for _ in range(18):
-            if barcode.width > bar_box[2] * 0.82 and bar_w > 0.11:
+            if barcode.width > bar_box[2] * 0.90 and bar_w > 0.11:
                 bar_w *= 0.94
                 barcode = barcode_module.Code128(code, barHeight=draw_h, barWidth=bar_w)
                 continue
-            if barcode.width < bar_box[2] * 0.62 and bar_w < 1.5:
+            if barcode.width < bar_box[2] * 0.82 and bar_w < 1.2:
                 bar_w *= 1.04
                 barcode = barcode_module.Code128(code, barHeight=draw_h, barWidth=bar_w)
                 continue
