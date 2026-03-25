@@ -29,6 +29,8 @@ except Exception:
 
 APP_NAME = "COLETA"
 PROJETO_REDE = "REDE"
+MIDIA_A4 = "A4 - varias etiquetas por folha"
+MIDIA_TERMICA = "Etiqueta termica 100x80 - 1 por pagina"
 PLANILHA_BASE_CRED = "bases padrão + cred.xlsx"
 
 DESTINOS = [
@@ -105,6 +107,12 @@ DEFAULT_CONFIG_REDE = {
     "altura_mm": 100.0,
     "espacamento_pt": 5.0,
     "escala_fonte": 1.8,
+}
+DEFAULT_CONFIG_TERMICA = {
+    "largura_mm": 100.0,
+    "altura_mm": 80.0,
+    "espacamento_pt": 4.0,
+    "escala_fonte": 1.6,
 }
 
 
@@ -333,7 +341,33 @@ def _layout_paginas_a4(largura_pt: float, altura_pt: float) -> dict | None:
         for col in range(cols):
             positions.append((x0 + col * step_x, y0 - row * step_y))
 
-    return {"por_pagina": cols * rows, "positions": positions}
+    return {
+        "por_pagina": cols * rows,
+        "positions": positions,
+        "page_size": A4,
+        "midia_saida": MIDIA_A4,
+    }
+
+
+def _layout_pagina_termica(largura_pt: float, altura_pt: float) -> dict | None:
+    if not REPORTLAB_AVAILABLE:
+        return None
+    return {
+        "por_pagina": 1,
+        "positions": [(0.0, 0.0)],
+        "page_size": (largura_pt, altura_pt),
+        "midia_saida": MIDIA_TERMICA,
+    }
+
+
+def _resolver_layout_paginas(
+    largura_pt: float,
+    altura_pt: float,
+    midia_saida: str,
+) -> dict | None:
+    if midia_saida == MIDIA_TERMICA:
+        return _layout_pagina_termica(largura_pt, altura_pt)
+    return _layout_paginas_a4(largura_pt, altura_pt)
 
 
 def _desenhar_etiqueta_padrao_pdf(
@@ -399,18 +433,19 @@ def _gerar_pdf_bytes(
     escala_fonte_usuario: float,
     ajuste_cabecalho: float = 0.0,
     ajuste_rodape: float = 0.0,
+    midia_saida: str = MIDIA_A4,
 ) -> bytes:
     if not REPORTLAB_AVAILABLE:
         raise RuntimeError("Biblioteca reportlab nao encontrada.")
 
     largura_pt = largura_mm * MM_TO_POINTS
     altura_pt = altura_mm * MM_TO_POINTS
-    layout = _layout_paginas_a4(largura_pt, altura_pt)
+    layout = _resolver_layout_paginas(largura_pt, altura_pt, midia_saida)
     if not layout:
         raise ValueError("Com esse tamanho de etiqueta nao cabe nenhuma unidade na folha A4.")
 
     buf = BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
+    c = canvas.Canvas(buf, pagesize=layout["page_size"])
     c.setTitle(APP_NAME)
 
     for i, etiqueta in enumerate(dados_lote["etiquetas"]):
@@ -445,7 +480,6 @@ def _gerar_pdf_bytes(
                 ajuste_cabecalho,
             )
 
-    c.showPage()
     c.save()
     return buf.getvalue()
 
@@ -461,13 +495,22 @@ def _init_state() -> None:
         st.session_state["origem_rede_prev"] = ""
     if "cred_code" not in st.session_state:
         st.session_state["cred_code"] = ""
-    if "cfg_modo_prev" not in st.session_state:
-        st.session_state["cfg_modo_prev"] = ""
+    if "cfg_contexto_prev" not in st.session_state:
+        st.session_state["cfg_contexto_prev"] = ""
+    if "cfg_midia_saida" not in st.session_state:
+        st.session_state["cfg_midia_saida"] = MIDIA_A4
 
 
-def _aplicar_config_padrao_por_modo(is_rede: bool) -> None:
+def _config_padrao_contexto(is_rede: bool, midia_saida: str) -> dict[str, float]:
+    if midia_saida == MIDIA_TERMICA:
+        return DEFAULT_CONFIG_TERMICA
+    return DEFAULT_CONFIG_REDE if is_rede else DEFAULT_CONFIG_OUTROS
+
+
+def _aplicar_config_padrao_por_contexto(is_rede: bool, midia_saida: str) -> None:
     modo_cfg = PROJETO_REDE if is_rede else "OUTROS"
-    cfg_padrao = DEFAULT_CONFIG_REDE if is_rede else DEFAULT_CONFIG_OUTROS
+    contexto_cfg = f"{modo_cfg}|{midia_saida}"
+    cfg_padrao = _config_padrao_contexto(is_rede, midia_saida)
     campos_cfg = [
         ("cfg_largura_mm", "largura_mm"),
         ("cfg_altura_mm", "altura_mm"),
@@ -475,10 +518,10 @@ def _aplicar_config_padrao_por_modo(is_rede: bool) -> None:
         ("cfg_escala_fonte", "escala_fonte"),
     ]
 
-    if st.session_state.get("cfg_modo_prev") != modo_cfg:
+    if st.session_state.get("cfg_contexto_prev") != contexto_cfg:
         for chave_state, chave_cfg in campos_cfg:
             st.session_state[chave_state] = cfg_padrao[chave_cfg]
-        st.session_state["cfg_modo_prev"] = modo_cfg
+        st.session_state["cfg_contexto_prev"] = contexto_cfg
         return
 
     for chave_state, chave_cfg in campos_cfg:
@@ -552,8 +595,19 @@ def _render_secao_outros(projeto: str) -> dict[str, str]:
     }
 
 
-def _render_secao_configuracao() -> dict[str, float]:
+def _render_secao_configuracao(is_rede: bool) -> dict[str, float | str]:
     st.subheader("Configuracao da Etiqueta")
+    midia_saida = st.selectbox(
+        "Midia de impressao",
+        [MIDIA_A4, MIDIA_TERMICA],
+        key="cfg_midia_saida",
+    )
+    _aplicar_config_padrao_por_contexto(is_rede, midia_saida)
+    if midia_saida == MIDIA_TERMICA:
+        st.caption(
+            "Para Zebra/Argox use este modo. O PDF sai com 1 etiqueta por pagina, "
+            "no tamanho exato configurado."
+        )
     s1, s2, s3, s4 = st.columns(4)
     largura_mm = float(s1.number_input("Largura (mm)", min_value=1.0, key="cfg_largura_mm"))
     altura_mm = float(s2.number_input("Altura (mm)", min_value=1.0, key="cfg_altura_mm"))
@@ -571,6 +625,7 @@ def _render_secao_configuracao() -> dict[str, float]:
         s6.number_input("Ajuste rodape (pt)", min_value=0.0, value=3.0, step=0.5)
     )
     return {
+        "midia_saida": midia_saida,
         "largura_mm": largura_mm,
         "altura_mm": altura_mm,
         "espacamento_linhas": espacamento_linhas,
@@ -624,6 +679,7 @@ def _processar_geracao(entradas: dict) -> None:
             escala_fonte_usuario=entradas["escala_fonte"],
             ajuste_cabecalho=entradas["ajuste_cabecalho"],
             ajuste_rodape=entradas["ajuste_rodape"],
+            midia_saida=entradas["midia_saida"],
         )
     except Exception as exc:
         st.session_state["erros"].append(str(exc))
@@ -684,14 +740,18 @@ def _render_preview_padrao(dados: dict, etiquetas: list[dict]) -> None:
 
 
 def _render_resumo_layout(resultado: dict, quantidade_etiquetas: int) -> None:
-    layout = _layout_paginas_a4(
+    layout = _resolver_layout_paginas(
         resultado["config"]["largura_mm"] * MM_TO_POINTS,
         resultado["config"]["altura_mm"] * MM_TO_POINTS,
+        resultado["config"]["midia_saida"],
     )
     if not layout:
         return
     por_folha = layout["por_pagina"]
     folhas = (quantidade_etiquetas + por_folha - 1) // por_folha
+    if resultado["config"]["midia_saida"] == MIDIA_TERMICA:
+        st.info(f"Modo termico 100x80 | 1 etiqueta por pagina | Etiquetas estimadas: {folhas}")
+        return
     st.info(f"Etiquetas por folha A4: {por_folha} | Folhas estimadas: {folhas}")
 
 
@@ -737,13 +797,12 @@ def main() -> None:
         st.warning(aviso_planilha)
 
     origem, destino, projeto, is_rede = _render_secao_base(origens)
-    _aplicar_config_padrao_por_modo(is_rede)
     campos_projeto = (
         _render_secao_rede(origem, origem_para_cred)
         if is_rede
         else _render_secao_outros(projeto)
     )
-    config_layout = _render_secao_configuracao()
+    config_layout = _render_secao_configuracao(is_rede)
 
     if st.button("Gerar etiqueta(s)", type="primary", use_container_width=True):
         entradas = _montar_entradas_formulario(

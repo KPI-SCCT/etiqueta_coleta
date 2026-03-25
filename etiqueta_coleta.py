@@ -38,6 +38,8 @@ except Exception:
 
 APP_NAME = "COLETA"
 PROJETO_REDE = "REDE"
+MIDIA_A4 = "A4 - varias etiquetas por folha"
+MIDIA_TERMICA = "Etiqueta termica 100x80 - 1 por pagina"
 PLANILHA_BASE_CRED = "bases padrÃ£o + cred.xlsx"
 FONT_FAMILY_SEGOE_UI = "Segoe UI"
 MSG_CAMPO_OBRIGATORIO = "Campo obrigatorio"
@@ -110,6 +112,12 @@ DEFAULT_CONFIG_REDE = {
     "espacamento_pt": "5",
     "escala_fonte": "1.8",
 }
+DEFAULT_CONFIG_TERMICA = {
+    "largura_mm": "100",
+    "altura_mm": "80",
+    "espacamento_pt": "4",
+    "escala_fonte": "1.6",
+}
 
 
 def _carregar_origens_e_cred() -> tuple[list[str], dict[str, str], str | None]:
@@ -166,7 +174,9 @@ class EtiquetaColetaApp:
         self.escala_fonte_var = tk.StringVar(value=DEFAULT_CONFIG_OUTROS["escala_fonte"])
         self.ajuste_cabecalho_var = tk.StringVar(value="3.0")
         self.ajuste_rodape_var = tk.StringVar(value="3.0")
+        self.midia_saida_var = tk.StringVar(value=MIDIA_A4)
         self.impressora_var = tk.StringVar(value=PRINTER_DEFAULT_LABEL)
+        self._config_contexto_prev = ""
         self.origens, self.origem_para_cred, self.aviso_planilha = _carregar_origens_e_cred()
 
         self.vcmd_digitos = (self.root.register(self._validar_digitos), "%P")
@@ -373,6 +383,16 @@ class EtiquetaColetaApp:
         )
         tamanho_frame = ttk.Frame(frame)
         tamanho_frame.grid(row=7, column=0, columnspan=4, sticky="w")
+        ttk.Label(tamanho_frame, text="Midia").pack(side=tk.LEFT)
+        self.cmb_midia_saida = ttk.Combobox(
+            tamanho_frame,
+            textvariable=self.midia_saida_var,
+            state="readonly",
+            width=32,
+            values=[MIDIA_A4, MIDIA_TERMICA],
+        )
+        self.cmb_midia_saida.pack(side=tk.LEFT, padx=(6, 12))
+        self.cmb_midia_saida.bind("<<ComboboxSelected>>", self._on_midia_change)
         ttk.Label(tamanho_frame, text="Largura").pack(side=tk.LEFT)
         ttk.Entry(
             tamanho_frame,
@@ -506,6 +526,9 @@ class EtiquetaColetaApp:
         self._atualizar_modo_projeto()
         self._preencher_cred_por_origem()
 
+    def _on_midia_change(self, _: tk.Event) -> None:
+        self._aplicar_config_padrao_por_contexto(self._modo_rede_ativo())
+
     def _atualizar_prefixo_romaneio(self) -> None:
         projeto = self._valor_listbox(self.lb_projeto, "Projeto", exibir_erro=False)
         if projeto:
@@ -525,7 +548,7 @@ class EtiquetaColetaApp:
         self.rede_data_emissao_entry.config(state="readonly")
 
         modo_rede = self._modo_rede_ativo()
-        self._aplicar_config_padrao_por_projeto(modo_rede)
+        self._aplicar_config_padrao_por_contexto(modo_rede)
 
         if modo_rede:
             self.frame_nao_rede.grid_remove()
@@ -535,12 +558,22 @@ class EtiquetaColetaApp:
             self.frame_rede.grid_remove()
             self.frame_nao_rede.grid()
 
-    def _aplicar_config_padrao_por_projeto(self, modo_rede: bool) -> None:
-        cfg = DEFAULT_CONFIG_REDE if modo_rede else DEFAULT_CONFIG_OUTROS
+    def _config_padrao_contexto(self, modo_rede: bool) -> dict[str, str]:
+        if self.midia_saida_var.get() == MIDIA_TERMICA:
+            return DEFAULT_CONFIG_TERMICA
+        return DEFAULT_CONFIG_REDE if modo_rede else DEFAULT_CONFIG_OUTROS
+
+    def _aplicar_config_padrao_por_contexto(self, modo_rede: bool) -> None:
+        modo_cfg = PROJETO_REDE if modo_rede else "OUTROS"
+        contexto_cfg = f"{modo_cfg}|{self.midia_saida_var.get()}"
+        if self._config_contexto_prev == contexto_cfg:
+            return
+        cfg = self._config_padrao_contexto(modo_rede)
         self.etiqueta_largura_var.set(cfg["largura_mm"])
         self.etiqueta_altura_var.set(cfg["altura_mm"])
         self.espacamento_linhas_var.set(cfg["espacamento_pt"])
         self.escala_fonte_var.set(cfg["escala_fonte"])
+        self._config_contexto_prev = contexto_cfg
 
     def _preencher_cred_por_origem(self) -> None:
         if not self._modo_rede_ativo():
@@ -903,7 +936,28 @@ class EtiquetaColetaApp:
             "linhas": linhas,
             "por_pagina": colunas * linhas,
             "posicoes": posicoes,
+            "page_size": A4,
+            "midia_saida": MIDIA_A4,
         }
+
+    def _layout_pagina_termica(self, largura_pt: float, altura_pt: float) -> dict | None:
+        if not REPORTLAB_AVAILABLE:
+            return None
+        return {
+            "colunas": 1,
+            "linhas": 1,
+            "por_pagina": 1,
+            "posicoes": [(0.0, 0.0)],
+            "page_size": (largura_pt, altura_pt),
+            "midia_saida": MIDIA_TERMICA,
+        }
+
+    def _resolver_layout_paginas(
+        self, largura_pt: float, altura_pt: float, exibir_erro: bool = True
+    ) -> dict | None:
+        if self.midia_saida_var.get() == MIDIA_TERMICA:
+            return self._layout_pagina_termica(largura_pt, altura_pt)
+        return self._layout_paginas_a4(largura_pt, altura_pt, exibir_erro=exibir_erro)
 
     def _desenhar_etiqueta_pdf(
         self,
@@ -985,7 +1039,7 @@ class EtiquetaColetaApp:
             or ajuste_rodape is None
         ):
             return False
-        layout = self._layout_paginas_a4(largura_pt, altura_pt, exibir_erro=True)
+        layout = self._resolver_layout_paginas(largura_pt, altura_pt, exibir_erro=True)
         if not layout:
             return False
 
@@ -993,7 +1047,7 @@ class EtiquetaColetaApp:
             caminho_pdf = Path(caminho_pdf)
             caminho_pdf.parent.mkdir(parents=True, exist_ok=True)
 
-            c = canvas.Canvas(str(caminho_pdf), pagesize=A4)
+            c = canvas.Canvas(str(caminho_pdf), pagesize=layout["page_size"])
             c.setTitle(APP_NAME)
 
             for indice, etiqueta in enumerate(dados_lote["etiquetas"]):
@@ -1028,8 +1082,6 @@ class EtiquetaColetaApp:
                         ajuste_cabecalho,
                     )
 
-            c.showPage()
-
             c.save()
             return True
         except Exception as erro:
@@ -1040,6 +1092,22 @@ class EtiquetaColetaApp:
                 f"Detalhe: {erro}",
             )
             return False
+
+    def _resumo_saida(self, total: int, layout: dict | None) -> str:
+        por_folha = layout["por_pagina"] if layout else 1
+        folhas = (total + por_folha - 1) // por_folha
+        if self.midia_saida_var.get() == MIDIA_TERMICA:
+            return (
+                f"Modo de saida: {MIDIA_TERMICA}\n"
+                f"Quantidade: {total}\n"
+                "Etiquetas por pagina: 1\n"
+                f"Etiquetas estimadas: {folhas}"
+            )
+        return (
+            f"Quantidade: {total}\n"
+            f"Etiquetas por folha: {por_folha}\n"
+            f"Folhas estimadas: {folhas}"
+        )
 
     def salvar_pdf(self) -> None:
         dados = self._coletar_dados()
@@ -1061,17 +1129,13 @@ class EtiquetaColetaApp:
             largura_pt, altura_pt = self._tamanho_etiqueta_points()
             layout = None
             if largura_pt and altura_pt:
-                layout = self._layout_paginas_a4(largura_pt, altura_pt, exibir_erro=False)
-            por_folha = layout["por_pagina"] if layout else 1
+                layout = self._resolver_layout_paginas(largura_pt, altura_pt, exibir_erro=False)
             total = len(dados["etiquetas"])
-            folhas = (total + por_folha - 1) // por_folha
             messagebox.showinfo(
                 "PDF gerado",
                 "Etiquetas salvas em:\n"
                 f"{caminho}\n\n"
-                f"Quantidade: {total}\n"
-                f"Etiquetas por folha: {por_folha}\n"
-                f"Folhas estimadas: {folhas}",
+                + self._resumo_saida(total, layout),
             )
 
     def _carregar_impressoras(self) -> None:
@@ -1126,17 +1190,13 @@ class EtiquetaColetaApp:
             largura_pt, altura_pt = self._tamanho_etiqueta_points()
             layout = None
             if largura_pt and altura_pt:
-                layout = self._layout_paginas_a4(largura_pt, altura_pt, exibir_erro=False)
-            por_folha = layout["por_pagina"] if layout else 1
+                layout = self._resolver_layout_paginas(largura_pt, altura_pt, exibir_erro=False)
             total = len(dados["etiquetas"])
-            folhas = (total + por_folha - 1) // por_folha
             messagebox.showinfo(
                 "Impressao enviada",
                 "Etiquetas enviadas para impressao.\n"
                 f"Impressora: {impressora}\n"
-                f"Quantidade: {total}\n"
-                f"Etiquetas por folha: {por_folha}\n"
-                f"Folhas estimadas: {folhas}",
+                + self._resumo_saida(total, layout),
             )
         except Exception as erro:
             messagebox.showerror(
