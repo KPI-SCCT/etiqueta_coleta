@@ -4,7 +4,15 @@ from io import BytesIO
 from pathlib import Path
 
 import streamlit as st
-from etiqueta_layout_engine import draw_template_padrao, draw_template_rede
+from etiqueta_layout_engine import (
+    clamp,
+    draw_template_padrao,
+    draw_template_rede,
+    draw_text_box,
+    inset_box,
+    split_box_vertical,
+    split_rows,
+)
 
 try:
     from reportlab.graphics.barcode import code128
@@ -124,6 +132,14 @@ def _data_hoje_br() -> str:
     return datetime.now().strftime(DATA_FMT_BR)
 
 
+def _is_projeto_cielo(projeto: str) -> bool:
+    return (projeto or "").strip().upper().startswith("CIELO")
+
+
+def _rotulo_nr_nf(projeto: str) -> str:
+    return "DCe" if _is_projeto_cielo(projeto) else "NR NF"
+
+
 @st.cache_data(show_spinner=False)
 def _carregar_origens_e_cred() -> tuple[list[str], dict[str, str], str | None]:
     path = Path(__file__).with_name(PLANILHA_BASE_CRED)
@@ -198,7 +214,7 @@ def _validar_campos_rede(entradas: dict, erros: list[str]) -> None:
 def _validar_campos_padrao(entradas: dict, erros: list[str]) -> None:
     for campo, chave, limite in [
         ("Romaneio", "romaneio_sufixo", None),
-        ("NR NF", "nr_nf", None),
+        (_rotulo_nr_nf(entradas.get("projeto", "")), "nr_nf", None),
         ("ID FEDEX", "id_fedex", 10),
     ]:
         erro = _erro_numero_obrigatorio(campo, entradas.get(chave, ""), limite)
@@ -238,6 +254,7 @@ def _validar_entradas(entradas: dict) -> list[str]:
 
 def _montar_dados_padrao(entradas: dict) -> dict:
     prefixo = PREFIXOS_ROMANEIO[entradas["projeto"]]
+    rotulo_nr_nf = _rotulo_nr_nf(entradas["projeto"])
     romaneio = f"{prefixo}{entradas['romaneio_sufixo']}"
     total = int(entradas["volume_total"])
     total_fmt = str(total).zfill(3)
@@ -256,6 +273,7 @@ def _montar_dados_padrao(entradas: dict) -> dict:
                 "destino": entradas["destino"],
                 "projeto": entradas["projeto"],
                 "romaneio": romaneio,
+                "nr_nf_label": rotulo_nr_nf,
                 "nr_nf": entradas["nr_nf"],
                 "id_fedex_data": id_fedex_data,
                 "volume": volume,
@@ -269,6 +287,7 @@ def _montar_dados_padrao(entradas: dict) -> dict:
         "destino": entradas["destino"],
         "projeto": entradas["projeto"],
         "romaneio": romaneio,
+        "nr_nf_label": rotulo_nr_nf,
         "nr_nf": entradas["nr_nf"],
         "id_fedex_data": id_fedex_data,
         "etiquetas": etiquetas,
@@ -394,6 +413,93 @@ def _desenhar_etiqueta_padrao_pdf(
         espacamento_extra=espacamento_extra,
         escala_fonte_usuario=escala_fonte_usuario,
         ajuste_cabecalho=ajuste_cabecalho,
+    )
+    _sobrepor_rotulo_nr_nf_cielo_pdf(
+        c,
+        x,
+        y,
+        largura_pt,
+        altura_pt,
+        dados,
+        espacamento_extra,
+        escala_fonte_usuario,
+        ajuste_cabecalho,
+    )
+
+
+def _sobrepor_rotulo_nr_nf_cielo_pdf(
+    c,
+    x,
+    y,
+    largura_pt,
+    altura_pt,
+    dados,
+    espacamento_extra,
+    escala_fonte_usuario,
+    ajuste_cabecalho=0.0,
+) -> None:
+    if not _is_projeto_cielo(dados.get("projeto", "")):
+        return
+
+    ref_w = 105 * MM_TO_POINTS
+    ref_h = 148.5 * MM_TO_POINTS
+    scale_ref = min(largura_pt / ref_w, altura_pt / ref_h)
+    scale_content = clamp(escala_fonte_usuario, 0.6, 4.0)
+
+    pad = max(3.2 * MM_TO_POINTS, 5.4 * MM_TO_POINTS * scale_ref)
+    content = inset_box((x, y, largura_pt, altura_pt), pad, pad)
+    cx, cy, cw, ch = content
+    if cw <= 0 or ch <= 0:
+        return
+
+    section_gap = max(1.8, 0.9 * MM_TO_POINTS * scale_ref) + (max(0.0, espacamento_extra) * 0.32)
+    section_gap = min(section_gap, ch * 0.08)
+    usable_h = max(6.0, ch - (2 * section_gap))
+
+    header_ratio = clamp(0.15 + (ajuste_cabecalho / max(ch, 1.0)), 0.10, 0.25)
+    barcode_ratio = 0.34
+    details_ratio = 1.0 - header_ratio - barcode_ratio
+    if details_ratio < 0.32:
+        details_ratio = 0.32
+
+    section_heights = [
+        usable_h * header_ratio,
+        usable_h * details_ratio,
+        usable_h - (usable_h * header_ratio) - (usable_h * details_ratio),
+    ]
+    _, details_box, _ = split_box_vertical(
+        (cx, cy, cw, ch),
+        section_heights,
+        gap=section_gap,
+        from_top=True,
+    )
+
+    row_gap = max(0.9, 0.45 * MM_TO_POINTS * scale_ref) + (max(0.0, espacamento_extra) * 0.42)
+    rows = split_rows(details_box, 6, gap=row_gap, from_top=True)
+    if len(rows) < 5:
+        return
+
+    rx, ry, rw, rh = rows[4]
+    label_w = clamp(details_box[2] * 0.34, 40.0, details_box[2] * 0.46)
+    label_box = (rx, ry, label_w, rh)
+    max_label_font = clamp(10.0 * scale_ref * scale_content, 6.8, 30.0)
+
+    c.saveState()
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(label_box[0] - 1.0, label_box[1], label_box[2] + 2.0, label_box[3], fill=1, stroke=0)
+    c.restoreState()
+    c.setFillColorRGB(0, 0, 0)
+    draw_text_box(
+        c,
+        label_box,
+        "DCe:",
+        "Helvetica-Bold",
+        max_font=max_label_font,
+        min_font=5.3,
+        max_lines=1,
+        line_spacing=1.05,
+        align="left",
+        valign="center",
     )
 
 
@@ -575,11 +681,12 @@ def _render_secao_rede(origem: str, origem_para_cred: dict[str, str]) -> dict[st
 def _render_secao_outros(projeto: str) -> dict[str, str]:
     st.subheader("Outros Projetos")
     prefixo = PREFIXOS_ROMANEIO.get(projeto, "")
+    rotulo_nr_nf = _rotulo_nr_nf(projeto)
     o1, o2 = st.columns([1, 2])
     o1.text_input("Prefixo Romaneio", value=prefixo, disabled=True)
     romaneio_sufixo = o2.text_input("Romaneio (numeros apos /) *", max_chars=20).strip()
     o3, o4 = st.columns(2)
-    nr_nf = o3.text_input("NR NF *", max_chars=20).strip()
+    nr_nf = o3.text_input(f"{rotulo_nr_nf} *", max_chars=20, key="nr_nf_padrao").strip()
     id_fedex = o4.text_input("ID FEDEX *", max_chars=10).strip()
     volume_total = st.text_input("Volume (qtd total de etiquetas) *", max_chars=3).strip()
 
@@ -721,6 +828,7 @@ def _render_preview_rede(etiquetas: list[dict]) -> None:
 
 def _render_preview_padrao(dados: dict, etiquetas: list[dict]) -> None:
     preview = [f"{e['volume']} -> {e['codigo_barras']}" for e in etiquetas[:120]]
+    rotulo_nr_nf = dados.get("nr_nf_label", _rotulo_nr_nf(dados.get("projeto", "")))
     if len(etiquetas) > 120:
         preview.append(f"... (mostrando 120 de {len(etiquetas)} etiquetas)")
     st.code(
@@ -729,7 +837,7 @@ def _render_preview_padrao(dados: dict, etiquetas: list[dict]) -> None:
             f"Destino: {dados['destino']}\n"
             f"Projeto: {dados['projeto']}\n"
             f"Romaneio: {dados['romaneio']}\n"
-            f"NR NF: {dados['nr_nf']}\n"
+            f"{rotulo_nr_nf}: {dados['nr_nf']}\n"
             f"ID FEDEX: {dados['id_fedex_data']}\n"
             f"Quantidade de etiquetas: {len(etiquetas)}\n\n"
             "Volumes / Codigos de barras:\n"
