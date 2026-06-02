@@ -140,32 +140,51 @@ def _rotulo_nr_nf(projeto: str) -> str:
     return "DCe" if _is_projeto_cielo(projeto) else "NR NF"
 
 
+def _path_planilha_base_cred() -> Path:
+    return Path(__file__).with_name(PLANILHA_BASE_CRED)
+
+
+def _assinatura_planilha_base_cred() -> tuple[int, int] | None:
+    path = _path_planilha_base_cred()
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_size
+
+
 @st.cache_data(show_spinner=False)
-def _carregar_origens_e_cred() -> tuple[list[str], dict[str, str], str | None]:
-    path = Path(__file__).with_name(PLANILHA_BASE_CRED)
+def _carregar_origens_e_cred(
+    planilha_assinatura: tuple[int, int] | None,
+) -> tuple[list[str], dict[str, str], str | None]:
+    # The file signature is part of the cache key, so xlsx-only updates refresh the list.
+    _ = planilha_assinatura
+    path = _path_planilha_base_cred()
     if not path.exists():
         return [], {}, f"Planilha nao encontrada: {PLANILHA_BASE_CRED}"
     if not OPENPYXL_AVAILABLE:
         return [], {}, "Biblioteca openpyxl nao encontrada para leitura da planilha."
 
     wb = load_workbook(path, data_only=True, read_only=True)
-    ws = wb.active
-    origens: list[str] = []
-    origem_para_cred: dict[str, str] = {}
+    try:
+        ws = wb.active
+        origens: list[str] = []
+        origem_para_cred: dict[str, str] = {}
 
-    for row in ws.iter_rows(min_row=2, max_col=4, values_only=True):
-        origem_raw = row[0]
-        cred_raw = row[2]
-        if origem_raw is None:
-            continue
-        origem = str(origem_raw).strip()
-        if not origem:
-            continue
-        if origem not in origens:
-            origens.append(origem)
+        for row in ws.iter_rows(min_row=2, max_col=4, values_only=True):
+            origem_raw = row[0]
+            cred_raw = row[2]
+            if origem_raw is None:
+                continue
+            origem = str(origem_raw).strip()
+            if not origem:
+                continue
+            if origem not in origens:
+                origens.append(origem)
 
-        if cred_raw is not None and str(cred_raw).strip():
-            origem_para_cred[origem] = str(cred_raw).strip().upper()
+            if cred_raw is not None and str(cred_raw).strip():
+                origem_para_cred[origem] = str(cred_raw).strip().upper()
+    finally:
+        wb.close()
 
     return origens, origem_para_cred, None
 
@@ -899,7 +918,9 @@ def main() -> None:
     st.set_page_config(page_title=APP_NAME, layout="wide")
     _init_state()
 
-    origens, origem_para_cred, aviso_planilha = _carregar_origens_e_cred()
+    origens, origem_para_cred, aviso_planilha = _carregar_origens_e_cred(
+        _assinatura_planilha_base_cred()
+    )
     st.title(APP_NAME)
     if aviso_planilha:
         st.warning(aviso_planilha)

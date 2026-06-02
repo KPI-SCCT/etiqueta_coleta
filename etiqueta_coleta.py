@@ -128,23 +128,26 @@ def _carregar_origens_e_cred() -> tuple[list[str], dict[str, str], str | None]:
         return [], {}, "Biblioteca openpyxl nao encontrada para ler a planilha."
 
     wb = load_workbook(path, data_only=True, read_only=True)
-    ws = wb.active
+    try:
+        ws = wb.active
 
-    origens: list[str] = []
-    origem_para_cred: dict[str, str] = {}
-    for row in ws.iter_rows(min_row=2, max_col=4, values_only=True):
-        origem_raw = row[0]
-        cred_raw = row[2]
-        if origem_raw is None:
-            continue
-        origem = str(origem_raw).strip()
-        if not origem:
-            continue
-        if origem not in origens:
-            origens.append(origem)
+        origens: list[str] = []
+        origem_para_cred: dict[str, str] = {}
+        for row in ws.iter_rows(min_row=2, max_col=4, values_only=True):
+            origem_raw = row[0]
+            cred_raw = row[2]
+            if origem_raw is None:
+                continue
+            origem = str(origem_raw).strip()
+            if not origem:
+                continue
+            if origem not in origens:
+                origens.append(origem)
 
-        if cred_raw is not None and str(cred_raw).strip():
-            origem_para_cred[origem] = str(cred_raw).strip().upper()
+            if cred_raw is not None and str(cred_raw).strip():
+                origem_para_cred[origem] = str(cred_raw).strip().upper()
+    finally:
+        wb.close()
 
     return origens, origem_para_cred, None
 
@@ -1215,4 +1218,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
